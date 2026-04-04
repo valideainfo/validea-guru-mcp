@@ -1,0 +1,16 @@
+{
+  "name": "validea-guru-mcp",
+  "version": "1.0.0",
+  "description": "MCP server exposing Validea guru score history data",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
