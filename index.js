@@ -22,6 +22,10 @@ const API_BASE_URL =
   process.env.GURU_API_BASE_URL ||
   "http://mors.validea.com/stocks/guruscoreshistory_api.asp";
 
+const SCREENER_BASE_URL =
+  process.env.GURU_SCREENER_URL ||
+  "http://mors.validea.com/stocks/guruscreener_api.asp";
+
 const API_KEY = process.env.GURU_API_KEY || "";
 
 const STRATEGIES = [
@@ -64,6 +68,29 @@ async function fetchGuruHistory(params) {
     throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
   }
   // Strip any trailing non-JSON content (e.g. stray text after the closing brace)
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+async function fetchScreener(params) {
+  const url = new URL(SCREENER_BASE_URL);
+  if (params.date)    url.searchParams.set("date",    params.date);
+  if (params.limit)   url.searchParams.set("limit",   String(params.limit));
+  if (params.sort_by) url.searchParams.set("sortby",  params.sort_by);
+  if (API_KEY)        url.searchParams.set("api_key", API_KEY);
+
+  // Add score filters: { warrenbuffett: { min: 80 }, peterlynch: { min: 80 } }
+  if (params.filters) {
+    for (const [strategy, bounds] of Object.entries(params.filters)) {
+      if (bounds.min != null) url.searchParams.set(`${strategy}_min`, String(bounds.min));
+      if (bounds.max != null) url.searchParams.set(`${strategy}_max`, String(bounds.max));
+    }
+  }
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
   const jsonEnd = text.lastIndexOf("}");
   if (jsonEnd === -1) throw new Error("Response contained no JSON object");
   return JSON.parse(text.slice(0, jsonEnd + 1));
@@ -117,6 +144,52 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "screen_guru_scores",
+      description:
+        "Screen all stocks in the Validea database by guru strategy score thresholds. " +
+        "Use this to answer questions like 'which stocks score over 80 on Warren Buffett?', " +
+        "'find stocks that pass both Peter Lynch and Benjamin Graham', or " +
+        "'show me the top 20 stocks by total guru count'. " +
+        "Returns matching tickers with all their scores and summary metrics. " +
+        "Defaults to the most recent available date.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          filters: {
+            type: "object",
+            description:
+              "Score filters keyed by strategy name. Each value can have 'min' and/or 'max'. " +
+              "Example: { \"warrenbuffett\": { \"min\": 80 }, \"peterlynch\": { \"min\": 80 } }",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                min: { type: "integer", minimum: 0, maximum: 100 },
+                max: { type: "integer", minimum: 0, maximum: 100 },
+              },
+            },
+          },
+          date: {
+            type: "string",
+            description: "Date to screen on in YYYY-MM-DD format. Defaults to most recent available date.",
+          },
+          sort_by: {
+            type: "string",
+            description:
+              "Column to sort results by descending. Use a strategy key (e.g. 'warrenbuffett') " +
+              "or a summary metric: totalgurusnew, valideaindexnew, growthindex, valueindex, " +
+              "fundamentalgrade, top5gurus. Default: totalgurusnew.",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 500,
+            description: "Maximum number of results to return (default 100, max 500).",
+          },
+        },
+        required: [],
+      },
+    },
+    {
       name: "list_guru_strategies",
       description:
         "List all 22 Validea guru investment strategies with their key names and labels. " +
@@ -132,6 +205,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  if (name === "screen_guru_scores") {
+    try {
+      const data = await fetchScreener({
+        filters:  args?.filters,
+        date:     args?.date,
+        sort_by:  args?.sort_by,
+        limit:    args?.limit,
+      });
+
+      if (!data.ok) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }],
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Fetch error: ${err.message}` }],
+      };
+    }
+  }
 
   if (name === "list_guru_strategies") {
     return {
