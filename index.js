@@ -206,7 +206,14 @@ if (process.env.PORT) {
     if (req.method === "GET" && url.pathname === "/sse") {
       const transport = new SSEServerTransport("/message", res);
       sessions.set(transport.sessionId, transport);
-      transport.onclose = () => sessions.delete(transport.sessionId);
+      transport.onclose = () => {
+        sessions.delete(transport.sessionId);
+        clearInterval(keepAliveInterval);
+      };
+      // Send a comment ping every 30s to keep the connection alive through Azure timeouts
+      const keepAliveInterval = setInterval(() => {
+        if (!res.writableEnded) res.write(": ping\n\n");
+      }, 30000);
       await server.connect(transport);
 
     } else if (req.method === "POST" && url.pathname === "/message") {
