@@ -108,7 +108,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         "Retrieve the historical Validea guru strategy scores for a given stock ticker. " +
         "Returns daily, weekly, or monthly scores (0–100) for up to 22 guru strategies " +
-        "over a specified date range (max 5 years per request).",
+        "over a specified date range (max 5 years per request). " +
+        "Scores of 80+ indicate 'some interest'; scores of 90+ indicate 'strong interest'.",
       inputSchema: {
         type: "object",
         properties: {
@@ -149,9 +150,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Screen all stocks in the Validea database by guru strategy score thresholds. " +
         "Use this to answer questions like 'which stocks score over 80 on Warren Buffett?', " +
         "'find stocks that pass both Peter Lynch and Benjamin Graham', or " +
-        "'show me the top 20 stocks by total guru count'. " +
+        "'show me the top stocks by Validea Index'. " +
         "Returns matching tickers with all their scores and summary metrics. " +
-        "Defaults to the most recent available date.",
+        "Defaults to the most recent available date. " +
+        "Summary metrics returned per stock: " +
+        "totalGurus = number of strategies where the stock scores 80+ (some interest); " +
+        "totalGurusSI = number of strategies where the stock scores 90+ (strong interest only); " +
+        "valideaIndex = a composite ranking score that weights strategies by historical performance — higher is better; " +
+        "growthIndex = composite score across growth-oriented strategies; " +
+        "valueIndex = composite score across value-oriented strategies; " +
+        "fundamentalGrade = overall fundamental quality grade; " +
+        "top5Gurus = score based on the top 5 best-performing guru strategies.",
       inputSchema: {
         type: "object",
         properties: {
