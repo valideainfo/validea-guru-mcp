@@ -26,6 +26,14 @@ const SCREENER_BASE_URL =
   process.env.GURU_SCREENER_URL ||
   "http://mors.validea.com/stocks/guruscreener_api.asp";
 
+const PORTFOLIO_PERF_URL =
+  process.env.PORTFOLIO_PERF_URL ||
+  "http://mors.validea.com/stocks/modelportfolioperf_api.asp";
+
+const PORTFOLIO_HOLDINGS_URL =
+  process.env.PORTFOLIO_HOLDINGS_URL ||
+  "http://mors.validea.com/stocks/modelportfolioholdings_api.asp";
+
 const API_KEY = process.env.GURU_API_KEY || "";
 
 const STRATEGIES = [
@@ -68,6 +76,37 @@ async function fetchGuruHistory(params) {
     throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
   }
   // Strip any trailing non-JSON content (e.g. stray text after the closing brace)
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+async function fetchPortfolioPerf(params) {
+  const url = new URL(PORTFOLIO_PERF_URL);
+  if (params.portfolioid != null) url.searchParams.set("portfolioid", String(params.portfolioid));
+  if (params.include_yearly)      url.searchParams.set("include_yearly", "true");
+  if (params.startdate)           url.searchParams.set("startdate", params.startdate);
+  if (params.enddate)             url.searchParams.set("enddate",   params.enddate);
+  if (API_KEY)                    url.searchParams.set("api_key",   API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+async function fetchPortfolioHoldings(params) {
+  const url = new URL(PORTFOLIO_HOLDINGS_URL);
+  if (params.portfolioid != null) url.searchParams.set("portfolioid", String(params.portfolioid));
+  if (params.ticker)              url.searchParams.set("ticker",      params.ticker);
+  if (params.asofdate)            url.searchParams.set("asofdate",    params.asofdate);
+  if (API_KEY)                    url.searchParams.set("api_key",     API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
   const jsonEnd = text.lastIndexOf("}");
   if (jsonEnd === -1) throw new Error("Response contained no JSON object");
   return JSON.parse(text.slice(0, jsonEnd + 1));
@@ -199,6 +238,101 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "list_model_portfolios",
+      description:
+        "List all active Validea model portfolios with summary performance statistics. " +
+        "Portfolios are factor-based strategies inspired by legendary investors (Buffett, Lynch, Graham, etc.). " +
+        "Each strategy is offered in multiple versions: 10-stock or 20-stock, and " +
+        "monthly/quarterly/annual/tax-efficient rebalancing — use the portfolioid to drill into a specific version. " +
+        "Returns portfolioid (needed for get_portfolio_performance and get_portfolio_holdings), " +
+        "name, guru it is based on, size, rebalancing type, inception date, and key stats: " +
+        "annualized inception return, YTD, 1yr, 3yr, 5yr, 10yr vs S&P 500, beta, accuracy, sharpe ratio, max drawdown. " +
+        "All returns are decimals (e.g. 0.12 = 12%).",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_portfolio_performance",
+      description:
+        "Get detailed performance statistics for a specific Validea model portfolio. " +
+        "Standard mode (portfolioid only): returns all period returns — YTD, 1-week, 1-month, 3-month, " +
+        "6-month, 1-year, 3-year, 5-year, 10-year, and since inception — all vs S&P 500, plus full risk metrics " +
+        "(beta, accuracy, sharpe ratio, standard deviation, max drawdown, days to recover, turnover, skewness, kurtosis). " +
+        "Set include_yearly=true to also get year-by-year returns from 2003 to present. " +
+        "Custom period mode (portfolioid + startdate + enddate): calculates portfolio and S&P 500 return over any date range " +
+        "from daily portfolio values; also returns annualized return for periods over 1 year. " +
+        "Use list_model_portfolios first to find the correct portfolioid. All returns are decimals (0.12 = 12%).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          portfolioid: {
+            type: "integer",
+            description: "Portfolio ID from list_model_portfolios. Required.",
+          },
+          include_yearly: {
+            type: "boolean",
+            description: "Include year-by-year returns from 2003 to present. Default false.",
+          },
+          startdate: {
+            type: "string",
+            description: "Start date for custom period in YYYY-MM-DD format. Requires enddate.",
+          },
+          enddate: {
+            type: "string",
+            description: "End date for custom period in YYYY-MM-DD format. Requires startdate.",
+          },
+        },
+        required: ["portfolioid"],
+      },
+    },
+    {
+      name: "get_portfolio_holdings",
+      description:
+        "Get the stock holdings for a specific Validea model portfolio. " +
+        "Returns current holdings by default (all positions not yet removed), " +
+        "or holdings as of any historical date using asofdate. " +
+        "Each holding includes ticker, company name, date added to portfolio, " +
+        "start price, guru score at time of entry, and number of guru strategies passing at entry. " +
+        "Use list_model_portfolios first to find the correct portfolioid.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          portfolioid: {
+            type: "integer",
+            description: "Portfolio ID from list_model_portfolios. Required.",
+          },
+          asofdate: {
+            type: "string",
+            description: "Return holdings as of this date in YYYY-MM-DD format. Defaults to current holdings.",
+          },
+        },
+        required: ["portfolioid"],
+      },
+    },
+    {
+      name: "get_portfolio_stock_history",
+      description:
+        "Look up which Validea model portfolios a stock has been (or currently is) a member of. " +
+        "Returns all historical and current portfolio memberships for the ticker across every portfolio " +
+        "(different strategies, sizes, rebalancing periods), with dates added/removed, " +
+        "whether it is currently held, and the guru score at time of entry. " +
+        "Useful for questions like 'which portfolios currently hold AAPL?', " +
+        "'has NVDA ever been in the Buffett portfolio?', or 'show me all portfolios MSFT has been in'.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticker: {
+            type: "string",
+            description: "Stock ticker symbol (e.g. AAPL, MSFT, NVDA).",
+          },
+        },
+        required: ["ticker"],
+      },
+    },
+    {
       name: "list_guru_strategies",
       description:
         "List all 22 Validea guru investment strategies with their key names and labels. " +
@@ -214,6 +348,71 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  if (name === "list_model_portfolios") {
+    try {
+      const data = await fetchPortfolioPerf({});
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "get_portfolio_performance") {
+    if (!args?.portfolioid) {
+      return { isError: true, content: [{ type: "text", text: "Error: portfolioid is required." }] };
+    }
+    try {
+      const data = await fetchPortfolioPerf({
+        portfolioid:    args.portfolioid,
+        include_yearly: args.include_yearly,
+        startdate:      args.startdate,
+        enddate:        args.enddate,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "get_portfolio_holdings") {
+    if (!args?.portfolioid) {
+      return { isError: true, content: [{ type: "text", text: "Error: portfolioid is required." }] };
+    }
+    try {
+      const data = await fetchPortfolioHoldings({
+        portfolioid: args.portfolioid,
+        asofdate:    args.asofdate,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "get_portfolio_stock_history") {
+    if (!args?.ticker) {
+      return { isError: true, content: [{ type: "text", text: "Error: ticker is required." }] };
+    }
+    try {
+      const data = await fetchPortfolioHoldings({ ticker: args.ticker });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
 
   if (name === "screen_guru_scores") {
     try {
