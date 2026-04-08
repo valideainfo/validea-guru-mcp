@@ -34,6 +34,14 @@ const PORTFOLIO_HOLDINGS_URL =
   process.env.PORTFOLIO_HOLDINGS_URL ||
   "http://mors.validea.com/stocks/modelportfolioholdings_api.asp";
 
+const TRADE_SIGNALS_URL =
+  process.env.TRADE_SIGNALS_URL ||
+  "http://mors.validea.com/stocks/tradealerts_signals_api.asp";
+
+const TRADE_ALERTS_URL =
+  process.env.TRADE_ALERTS_URL ||
+  "http://mors.validea.com/stocks/tradealerts_stocks_api.asp";
+
 const API_KEY = process.env.GURU_API_KEY || "";
 
 const STRATEGIES = [
@@ -103,6 +111,39 @@ async function fetchPortfolioHoldings(params) {
   if (params.ticker)              url.searchParams.set("ticker",      params.ticker);
   if (params.asofdate)            url.searchParams.set("asofdate",    params.asofdate);
   if (API_KEY)                    url.searchParams.set("api_key",     API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+async function fetchTradeSignals(params) {
+  const url = new URL(TRADE_SIGNALS_URL);
+  if (params.signalid != null) url.searchParams.set("signalid", String(params.signalid));
+  if (params.sortby)           url.searchParams.set("sortby",   params.sortby);
+  if (API_KEY)                 url.searchParams.set("api_key",  API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+async function fetchTradeAlerts(params) {
+  const url = new URL(TRADE_ALERTS_URL);
+  if (params.ticker)    url.searchParams.set("ticker",     params.ticker);
+  if (params.signalid != null) url.searchParams.set("signalid",  String(params.signalid));
+  if (params.status)    url.searchParams.set("status",     params.status);
+  if (params.from_date) url.searchParams.set("from_date",  params.from_date);
+  if (params.to_date)   url.searchParams.set("to_date",    params.to_date);
+  if (params.sortby)    url.searchParams.set("sortby",     params.sortby);
+  if (params.limit)     url.searchParams.set("limit",      String(params.limit));
+  if (API_KEY)          url.searchParams.set("api_key",    API_KEY);
 
   const response = await fetch(url.toString());
   const text = await response.text();
@@ -333,6 +374,87 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "list_trade_signals",
+      description:
+        "List all Validea trade alert signals with their historical performance statistics. " +
+        "Each signal is a rules-based buy trigger tied to a guru strategy and a specific holding period (1, 3, or 6 months). " +
+        "Use this to find the best-performing signals overall, or to look up a specific signal's stats. " +
+        "Returns for each signal: signal name, holding period, annualized return (based on target period), " +
+        "return vs S&P 500, accuracy (% of alerts that were positive), accuracy vs S&P 500, and alert count. " +
+        "Sortable by annualized return (default), raw return by period, accuracy, or alert count. " +
+        "Pass signalid to get full stats across all four measurement periods (1m, 3m, 6m, 1yr) including highs and lows. " +
+        "All returns are decimals (0.12 = 12%). Accuracy is 0–1 (0.73 = 73%).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          signalid: {
+            type: "integer",
+            description: "Optional. Return full detail for a single signal instead of the list.",
+          },
+          sortby: {
+            type: "string",
+            enum: ["annreturn","return_1m","return_3m","return_6m","return_1y","accuracy_1m","accuracy_3m","accuracy_6m","accuracy_1y","count_1m","count_3m","count_6m","count_1y"],
+            description: "Sort the signal list by this metric, descending. Default: annreturn (annualized return based on each signal's target holding period).",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "get_trade_alerts",
+      description:
+        "Search and filter Validea trade alert stock picks. " +
+        "A trade alert is a specific stock recommended by a signal on a specific date, with a defined holding period. " +
+        "Returns open alerts (still within holding period, no exit price yet) by default. " +
+        "Use status=closed for completed alerts with final returns, or status=all for both. " +
+        "Filter by ticker to see all alerts ever issued for a stock. " +
+        "Filter by signalid (from list_trade_signals) to see all alerts for one signal. " +
+        "Filter by date range (from_date / to_date) to see alerts issued within a period. " +
+        "Sort by date (newest first by default) or by performance (best/worst return). " +
+        "Each alert includes: signal name, holding period, ticker, company, sector, industry, " +
+        "alert date, target end date, start price, current/end price, alert return, S&P 500 return over same period, " +
+        "and the signal's historical average return for that holding period. " +
+        "All returns are decimals (0.12 = 12%).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            enum: ["open", "closed", "all"],
+            description: "open = alerts still within holding period (default); closed = completed alerts with final returns; all = both.",
+          },
+          ticker: {
+            type: "string",
+            description: "Filter to alerts for a specific stock ticker (e.g. AAPL).",
+          },
+          signalid: {
+            type: "integer",
+            description: "Filter to alerts from a specific signal. Use list_trade_signals to find signalid values.",
+          },
+          from_date: {
+            type: "string",
+            description: "Return only alerts issued on or after this date (YYYY-MM-DD).",
+          },
+          to_date: {
+            type: "string",
+            description: "Return only alerts issued on or before this date (YYYY-MM-DD).",
+          },
+          sortby: {
+            type: "string",
+            enum: ["date_desc", "date_asc", "perf_desc", "perf_asc"],
+            description: "Sort order. date_desc = newest alerts first (default); perf_desc = best return first; perf_asc = worst return first.",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 500,
+            description: "Maximum number of alerts to return. Default 100, max 500.",
+          },
+        },
+        required: [],
+      },
+    },
+    {
       name: "list_guru_strategies",
       description:
         "List all 22 Validea guru investment strategies with their key names and labels. " +
@@ -405,6 +527,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     try {
       const data = await fetchPortfolioHoldings({ ticker: args.ticker });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "list_trade_signals") {
+    try {
+      const data = await fetchTradeSignals({
+        signalid: args?.signalid,
+        sortby:   args?.sortby,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "get_trade_alerts") {
+    try {
+      const data = await fetchTradeAlerts({
+        ticker:    args?.ticker,
+        signalid:  args?.signalid,
+        status:    args?.status,
+        from_date: args?.from_date,
+        to_date:   args?.to_date,
+        sortby:    args?.sortby,
+        limit:     args?.limit,
+      });
       if (!data.ok) {
         return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
       }
