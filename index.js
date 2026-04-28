@@ -10,9 +10,11 @@
  */
 
 import http from "http";
+import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -661,9 +663,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 if (process.env.PORT) {
-  // Remote mode: HTTP server with SSE transport (Azure App Service, etc.)
+  // Remote mode: HTTP server (Azure App Service, etc.)
+  // Supports two transports:
+  //   /sse + /message — legacy HTTP+SSE transport (kept for backwards compat)
+  //   /mcp            — modern Streamable HTTP transport (preferred for new clients)
   const PORT = parseInt(process.env.PORT, 10);
-  const sessions = new Map(); // sessionId -> SSEServerTransport
+  const sessions = new Map();           // sessionId -> SSEServerTransport
+  const streamableSessions = new Map(); // sessionId -> StreamableHTTPServerTransport
 
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost`);
@@ -690,6 +696,28 @@ if (process.env.PORT) {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("Session not found");
       }
+
+    } else if (url.pathname === "/mcp") {
+      const sessionId = req.headers["mcp-session-id"];
+      let transport = sessionId ? streamableSessions.get(sessionId) : undefined;
+
+      if (!transport) {
+        if (req.method !== "POST") {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Bad Request: missing or invalid Mcp-Session-Id");
+          return;
+        }
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid) => streamableSessions.set(sid, transport),
+        });
+        transport.onclose = () => {
+          if (transport.sessionId) streamableSessions.delete(transport.sessionId);
+        };
+        await server.connect(transport);
+      }
+
+      await transport.handleRequest(req, res);
 
     } else if (req.method === "GET" && url.pathname === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
