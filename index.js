@@ -73,7 +73,9 @@ const STRATEGIES = [
 
 async function fetchGuruHistory(params) {
   const url = new URL(API_BASE_URL);
-  url.searchParams.set("ticker", params.ticker);
+  if (params.ticker)           url.searchParams.set("ticker",           params.ticker);
+  if (params.cusip)            url.searchParams.set("cusip",            params.cusip);
+  if (params.securitymasterid) url.searchParams.set("securitymasterid", String(params.securitymasterid));
   if (params.startdate) url.searchParams.set("startdate", params.startdate);
   if (params.enddate)   url.searchParams.set("enddate",   params.enddate);
   if (params.frequency) url.searchParams.set("frequency", params.frequency);
@@ -188,16 +190,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "get_guru_scores_history",
       description:
-        "Retrieve the historical Validea guru strategy scores for a given stock ticker. " +
+        "Retrieve the historical Validea guru strategy scores for a stock. " +
         "Returns daily, weekly, or monthly scores (0–100) for up to 22 guru strategies " +
         "over a specified date range (max 5 years per request). " +
-        "Scores of 80+ indicate 'some interest'; scores of 90+ indicate 'strong interest'.",
+        "Scores of 80+ indicate 'some interest'; scores of 90+ indicate 'strong interest'. " +
+        "Provide exactly one of: ticker (for active/known symbols), cusip (9-character CUSIP, " +
+        "useful for delisted or acquired companies whose ticker is no longer valid), " +
+        "or securitymasterid (Validea's internal integer ID, returned in prior responses).",
       inputSchema: {
         type: "object",
         properties: {
           ticker: {
             type: "string",
-            description: "Stock ticker symbol (e.g. AAPL, MSFT, TSLA)",
+            description: "Stock ticker symbol (e.g. AAPL, MSFT, TSLA). Use for active securities with a valid ticker.",
+          },
+          cusip: {
+            type: "string",
+            description:
+              "9-character CUSIP identifier. Use for delisted or acquired companies " +
+              "whose ticker is no longer valid (e.g. '848637104' for Splunk/SPLK).",
+          },
+          securitymasterid: {
+            type: "integer",
+            description:
+              "Validea internal security ID (integer). Returned as securityMasterId in prior API responses. " +
+              "Use when you already have this ID from a previous lookup.",
           },
           startdate: {
             type: "string",
@@ -223,7 +240,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "Maximum number of rows to return (default 2500, max 2500).",
           },
         },
-        required: ["ticker"],
+        required: [],
       },
     },
     {
@@ -612,20 +629,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   if (name === "get_guru_scores_history") {
-    if (!args || !args.ticker) {
+    const identifiers = [args?.ticker, args?.cusip, args?.securitymasterid].filter(Boolean);
+    if (identifiers.length === 0) {
       return {
         isError: true,
-        content: [{ type: "text", text: "Error: ticker is required." }],
+        content: [{ type: "text", text: "Error: provide exactly one of: ticker, cusip, or securitymasterid." }],
+      };
+    }
+    if (identifiers.length > 1) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: "Error: provide only one of: ticker, cusip, or securitymasterid — not multiple." }],
       };
     }
 
     try {
       const data = await fetchGuruHistory({
-        ticker:    args.ticker,
-        startdate: args.startdate,
-        enddate:   args.enddate,
-        frequency: args.frequency,
-        limit:     args.limit,
+        ticker:           args.ticker,
+        cusip:            args.cusip,
+        securitymasterid: args.securitymasterid,
+        startdate:        args.startdate,
+        enddate:          args.enddate,
+        frequency:        args.frequency,
+        limit:            args.limit,
       });
 
       if (!data.ok) {
