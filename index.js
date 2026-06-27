@@ -44,6 +44,10 @@ const TRADE_ALERTS_URL =
   process.env.TRADE_ALERTS_URL ||
   "http://mors.validea.com/stocks/tradealerts_stocks_api.asp";
 
+const ANALYSIS_BASE_URL =
+  process.env.GURU_ANALYSIS_URL ||
+  "http://mors.validea.com/stocks/guruanalysisfull_api.asp";
+
 const API_KEY = process.env.GURU_API_KEY || "";
 
 const STRATEGIES = [
@@ -171,6 +175,64 @@ async function fetchScreener(params) {
       if (bounds.max != null) url.searchParams.set(`${strategy}_max`, String(bounds.max));
     }
   }
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+// Resolve a user-supplied strategy reference (key, label, or common alias)
+// to its canonical strategy key. Returns null if no confident match.
+function resolveStrategyKey(input) {
+  if (!input) return null;
+  const q = String(input).toLowerCase().trim();
+
+  // Exact key match
+  const byKey = STRATEGIES.find((s) => s.key.toLowerCase() === q);
+  if (byKey) return byKey.key;
+
+  // Exact label match
+  const byLabel = STRATEGIES.find((s) => s.label.toLowerCase() === q);
+  if (byLabel) return byLabel.key;
+
+  // Common name aliases -> key
+  const ALIASES = {
+    "graham": "benjamingraham", "benjamin graham": "benjamingraham",
+    "buffett": "warrenbuffett", "warren buffett": "warrenbuffett",
+    "dreman": "daviddreman", "david dreman": "daviddreman",
+    "fisher": "kennethfisher", "kenneth fisher": "kennethfisher",
+    "neff": "johnneff", "john neff": "johnneff",
+    "piotroski": "josephpiotroski", "joseph piotroski": "josephpiotroski",
+    "greenblatt": "joelgreenblatt", "joel greenblatt": "joelgreenblatt", "magic formula": "joelgreenblatt",
+    "value composite": "oshaughnvc2", "oshaughnessy value": "oshaughnvc2",
+    "carlisle": "tobiascarlisle", "tobias carlisle": "tobiascarlisle", "acquirer's multiple": "tobiascarlisle", "acquirers multiple": "tobiascarlisle",
+    "rasmussen": "danrasmussen", "dan rasmussen": "danrasmussen", "private equity": "danrasmussen",
+    "huang": "dashanhuang", "dashan huang": "dashanhuang", "twin momentum": "dashanhuang",
+    "mohanram": "parthamohanram", "partha mohanram": "parthamohanram", "p/b growth": "parthamohanram",
+    "zweig": "martinzweig", "martin zweig": "martinzweig",
+    "oneil": "williamoneil", "o'neil": "williamoneil", "william oneil": "williamoneil", "william o'neil": "williamoneil",
+    "motley fool": "motleyfool", "fool": "motleyfool",
+    "gray": "wesleygray", "wesley gray": "wesleygray", "quantitative momentum": "wesleygray",
+    "thorp": "waynethorp", "wayne thorp": "waynethorp", "earnings revision": "waynethorp",
+    "lynch": "peterlynch", "peter lynch": "peterlynch",
+    "james oshaughnessy": "jamesposhaughnessy", "growth/value": "jamesposhaughnessy", "growth value": "jamesposhaughnessy",
+    "van vliet": "pimvanvliet", "vanvliet": "pimvanvliet", "pim van vliet": "pimvanvliet", "multi-factor": "pimvanvliet", "multi factor": "pimvanvliet",
+    "patrick oshaughnessy": "patrickoshaughnessy", "millennial": "patrickoshaughnessy", "milennial": "patrickoshaughnessy",
+    "faber": "mebfaber", "meb faber": "mebfaber", "shareholder yield": "mebfaber",
+  };
+  if (ALIASES[q]) return ALIASES[q];
+
+  return null;
+}
+
+async function fetchGuruAnalysis(params) {
+  const url = new URL(ANALYSIS_BASE_URL);
+  if (params.ticker)   url.searchParams.set("ticker",   params.ticker);
+  if (params.strategy) url.searchParams.set("strategy", params.strategy);
+  if (API_KEY)         url.searchParams.set("api_key",  API_KEY);
 
   const response = await fetch(url.toString());
   const text = await response.text();
@@ -484,6 +546,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: [],
       },
     },
+    {
+      name: "get_guru_analysis",
+      description:
+        "Get the detailed REASONING behind Validea's guru scores for a stock — the criterion-by-criterion " +
+        "analysis that explains WHY a stock passes or fails each strategy (not just the numeric score). " +
+        "This is the same analysis shown on Validea's full guru report page. " +
+        "Provide a ticker to get the breakdown for all 22 strategies, or add a strategy to focus on just one " +
+        "(e.g. strategy='twin momentum' or strategy='dashanhuang' for the Twin Momentum / Dashan Huang model). " +
+        "Each strategy returns its score, an overall verdict (Strong Interest / Some Interest / No Interest), " +
+        "pass/fail/neutral counts, and a criteria[] array. Each criterion has: the test name, the result " +
+        "(PASS / FAIL / NEUTRAL, or the BONUS variants), a passed boolean (true/false/null for neutral), and a " +
+        "plain-language analysis explaining how the stock measured up. " +
+        "Use this for questions like 'why does AAPL fail the Value Investor model?', " +
+        "'give me the full Twin Momentum analysis of NVDA', or 'summarize how AAPL scores across all guru strategies'.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticker: {
+            type: "string",
+            description: "Stock ticker to analyze (e.g. AAPL).",
+          },
+          strategy: {
+            type: "string",
+            description:
+              "Optional. Limit the analysis to a single strategy. Accepts a strategy key (e.g. dashanhuang), " +
+              "its label (e.g. 'Twin Momentum Investor'), or a common name (e.g. 'twin momentum', 'buffett', " +
+              "'graham', 'peter lynch'). Omit to get all 22 strategies. Use list_guru_strategies to see all keys/labels.",
+          },
+        },
+        required: ["ticker"],
+      },
+    },
   ],
 }));
 
@@ -626,6 +720,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         },
       ],
     };
+  }
+
+  if (name === "get_guru_analysis") {
+    if (!args?.ticker) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: "Error: ticker is required." }],
+      };
+    }
+
+    let strategyKey;
+    if (args.strategy) {
+      strategyKey = resolveStrategyKey(args.strategy);
+      if (!strategyKey) {
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: `Error: could not match strategy "${args.strategy}" to a known guru. ` +
+                  `Call list_guru_strategies for valid keys/labels, or omit strategy to get all 22.`,
+          }],
+        };
+      }
+    }
+
+    try {
+      const data = await fetchGuruAnalysis({ ticker: args.ticker, strategy: strategyKey });
+      if (!data.ok) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }],
+        };
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Fetch error: ${err.message}` }],
+      };
+    }
   }
 
   if (name === "get_guru_scores_history") {
