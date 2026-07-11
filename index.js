@@ -48,6 +48,10 @@ const ANALYSIS_BASE_URL =
   process.env.GURU_ANALYSIS_URL ||
   "http://mors.validea.com/stocks/guruanalysisfull_api.asp";
 
+const FACTOR_RANKS_URL =
+  process.env.FACTOR_RANKS_URL ||
+  "http://mors.validea.com/stocks/factorranks_api.asp";
+
 const API_KEY = process.env.GURU_API_KEY || "";
 
 const STRATEGIES = [
@@ -163,18 +167,43 @@ async function fetchTradeAlerts(params) {
 
 async function fetchScreener(params) {
   const url = new URL(SCREENER_BASE_URL);
-  if (params.date)    url.searchParams.set("date",    params.date);
-  if (params.limit)   url.searchParams.set("limit",   String(params.limit));
-  if (params.sort_by) url.searchParams.set("sortby",  params.sort_by);
-  if (API_KEY)        url.searchParams.set("api_key", API_KEY);
+  if (params.date)     url.searchParams.set("date",    params.date);
+  if (params.limit)    url.searchParams.set("limit",   String(params.limit));
+  if (params.sort_by)  url.searchParams.set("sortby",  params.sort_by);
+  if (params.sort_dir) url.searchParams.set("sortdir", params.sort_dir);
+  if (API_KEY)         url.searchParams.set("api_key", API_KEY);
 
-  // Add score filters: { warrenbuffett: { min: 80 }, peterlynch: { min: 80 } }
+  // Add guru score filters: { warrenbuffett: { min: 80 }, peterlynch: { min: 80 } }
   if (params.filters) {
     for (const [strategy, bounds] of Object.entries(params.filters)) {
       if (bounds.min != null) url.searchParams.set(`${strategy}_min`, String(bounds.min));
       if (bounds.max != null) url.searchParams.set(`${strategy}_max`, String(bounds.max));
     }
   }
+
+  // Add factor rank filters: { value: { max: 20 }, quality: { max: 30 } }
+  // Ranks are percentiles 1-100, lower = better (except negativeQuality).
+  if (params.factor_filters) {
+    for (const [factor, bounds] of Object.entries(params.factor_filters)) {
+      if (bounds.min != null) url.searchParams.set(`${factor}_min`, String(bounds.min));
+      if (bounds.max != null) url.searchParams.set(`${factor}_max`, String(bounds.max));
+    }
+  }
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+async function fetchFactorRanks(params) {
+  const url = new URL(FACTOR_RANKS_URL);
+  if (params.ticker)           url.searchParams.set("ticker",           params.ticker);
+  if (params.cusip)            url.searchParams.set("cusip",            params.cusip);
+  if (params.securitymasterid) url.searchParams.set("securitymasterid", String(params.securitymasterid));
+  if (API_KEY)                 url.searchParams.set("api_key",          API_KEY);
 
   const response = await fetch(url.toString());
   const text = await response.text();
@@ -256,6 +285,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Returns daily, weekly, or monthly scores (0–100) for up to 22 guru strategies " +
         "over a specified date range (max 5 years per request). " +
         "Scores of 80+ indicate 'some interest'; scores of 90+ indicate 'strong interest'. " +
+        "Each dated row also includes the Validea consensus index over time: valideaIndex " +
+        "(the current/consensus index — the default), valideaIndexOld (the original Validea Index), " +
+        "plus growthIndex, valueIndex, and totalGurus (number of strategies scoring 80+). " +
+        "Use this to track how a stock's consensus Validea Index has moved over time. " +
         "Provide exactly one of: ticker (for active/known symbols), cusip (9-character CUSIP, " +
         "useful for delisted or acquired companies whose ticker is no longer valid), " +
         "or securitymasterid (Validea's internal integer ID, returned in prior responses).",
@@ -308,33 +341,59 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "screen_guru_scores",
       description:
-        "Screen all stocks in the Validea database by guru strategy score thresholds. " +
+        "Screen all stocks in the Validea database by guru strategy score thresholds AND/OR factor rank percentiles. " +
         "Use this to answer questions like 'which stocks score over 80 on Warren Buffett?', " +
-        "'find stocks that pass both Peter Lynch and Benjamin Graham', or " +
-        "'show me the top stocks by Validea Index'. " +
-        "Returns matching tickers with all their scores and summary metrics. " +
+        "'find stocks that pass both Peter Lynch and Benjamin Graham', " +
+        "'show me the top stocks by Validea Index', or " +
+        "'find the cheapest quality stocks' (value_max + quality_max factor filters). " +
+        "Returns matching tickers with all their scores, summary metrics, and factor ranks. " +
         "Defaults to the most recent available date. " +
         "Summary metrics returned per stock: " +
         "totalGurus = number of strategies where the stock scores 80+ (some interest); " +
         "totalGurusSI = number of strategies where the stock scores 90+ (strong interest only); " +
-        "valideaIndex = a composite ranking score that weights strategies by historical performance — higher is better; " +
+        "valideaIndex = the current/consensus composite ranking (weights strategies by historical performance — higher is better; this is the DEFAULT consensus score, from valideaindexnew); " +
+        "valideaIndexOld = the original ('classic') Validea Index (from valideaindex) for comparison; " +
         "growthIndex = composite score across growth-oriented strategies; " +
         "valueIndex = composite score across value-oriented strategies; " +
         "fundamentalGrade = overall fundamental quality grade; " +
-        "top5Gurus = score based on the top 5 best-performing guru strategies.",
+        "top5Gurus = score based on the top 5 best-performing guru strategies. " +
+        "Each stock also returns a factorRanks object of percentile ranks (1-100, LOWER is better, " +
+        "EXCEPT negativeQuality where HIGHER is better): value, quality, momentum, totalMomentum, " +
+        "lowVolatility, negativeQuality, fundamentalMomentum, shareholderYield, overall, total, marketCap, " +
+        "peRatio, priceToSales, priceToBook, priceToCashFlow, evToEbitda, returnOnEquity, returnOnTotalCapital, " +
+        "grossMargin, netMargin, beta, standardDeviation, debt, cashFlow, eps, relativeStrength, " +
+        "epsVariability, salesVariability.",
       inputSchema: {
         type: "object",
         properties: {
           filters: {
             type: "object",
             description:
-              "Score filters keyed by strategy name. Each value can have 'min' and/or 'max'. " +
+              "Guru score filters keyed by strategy name. Each value can have 'min' and/or 'max' (0-100). " +
               "Example: { \"warrenbuffett\": { \"min\": 80 }, \"peterlynch\": { \"min\": 80 } }",
             additionalProperties: {
               type: "object",
               properties: {
                 min: { type: "integer", minimum: 0, maximum: 100 },
                 max: { type: "integer", minimum: 0, maximum: 100 },
+              },
+            },
+          },
+          factor_filters: {
+            type: "object",
+            description:
+              "Factor rank filters keyed by factor name. Ranks are percentiles 1-100 where LOWER is better " +
+              "(except negativeQuality where HIGHER is better), so typically use 'max' to keep only top-ranked stocks. " +
+              "Example: { \"value\": { \"max\": 20 }, \"quality\": { \"max\": 30 } } finds stocks in the best 20% on value " +
+              "and best 30% on quality. Valid factor keys: value, quality, momentum, totalMomentum, lowVolatility, " +
+              "negativeQuality, fundamentalMomentum, shareholderYield, overall, total, marketCap, peRatio, priceToSales, " +
+              "priceToBook, priceToCashFlow, evToEbitda, returnOnEquity, returnOnTotalCapital, grossMargin, netMargin, " +
+              "beta, standardDeviation, debt, cashFlow, eps, relativeStrength, epsVariability, salesVariability.",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                min: { type: "integer", minimum: 1, maximum: 100 },
+                max: { type: "integer", minimum: 1, maximum: 100 },
               },
             },
           },
@@ -345,9 +404,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           sort_by: {
             type: "string",
             description:
-              "Column to sort results by descending. Use a strategy key (e.g. 'warrenbuffett') " +
-              "or a summary metric: totalgurusnew, valideaindexnew, growthindex, valueindex, " +
-              "fundamentalgrade, top5gurus. Default: totalgurusnew.",
+              "Column to sort results by. Use a strategy key (e.g. 'warrenbuffett'), a summary metric " +
+              "(totalgurusnew, valideaindexnew [current/consensus], valideaindex [original], growthindex, valueindex, " +
+              "fundamentalgrade, top5gurus), or a factor key (value, quality, momentum, lowVolatility, negativeQuality, ...). " +
+              "Default: totalgurusnew. Guru/summary columns sort best-first as DESC; factor ranks sort best-first as ASC " +
+              "(lower percentile = better), except negativeQuality. Use sort_dir to override.",
+          },
+          sort_dir: {
+            type: "string",
+            enum: ["asc", "desc"],
+            description:
+              "Optional override of sort direction for sort_by. If omitted, guru/summary columns default to desc and " +
+              "factor rank columns default to asc (best-first), except negativeQuality which defaults to desc.",
           },
           limit: {
             type: "integer",
@@ -578,6 +646,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["ticker"],
       },
     },
+    {
+      name: "get_factor_ranks",
+      description:
+        "Get Validea's individual factor rank percentiles for a single stock (from the factorranks table). " +
+        "These rank the stock against the whole universe on each factor. Every value is a percentile from " +
+        "1-100 where LOWER is better (top of the universe), EXCEPT negativeQuality where HIGHER is better. " +
+        "marketCap here is a size percentile (descriptive, not a quality signal). " +
+        "Returns a factorRanks object with: value, quality, momentum, totalMomentum, lowVolatility, " +
+        "negativeQuality, fundamentalMomentum, shareholderYield, overall, total, marketCap, peRatio, " +
+        "priceToSales, priceToBook, priceToCashFlow, evToEbitda, returnOnEquity, returnOnTotalCapital, " +
+        "grossMargin, netMargin, beta, standardDeviation, debt, cashFlow, eps, relativeStrength, " +
+        "epsVariability, salesVariability. Also returns the raw marketCap value, the asOfDate, and up to " +
+        "six comparable companies (similar-profile peers). " +
+        "Use this for questions like 'how does AAPL rank on value and quality?', " +
+        "'is NVDA expensive?' (check value/peRatio/priceToSales percentiles), or " +
+        "'what's TSLA's momentum and low-volatility ranking?'. " +
+        "To screen or rank the whole universe by these factors instead, use screen_guru_scores with factor_filters. " +
+        "Provide exactly one of: ticker, cusip (for delisted/acquired names), or securitymasterid.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticker: {
+            type: "string",
+            description: "Stock ticker symbol (e.g. AAPL, MSFT, TSLA).",
+          },
+          cusip: {
+            type: "string",
+            description:
+              "9-character CUSIP identifier. Use for delisted or acquired companies whose ticker is no longer valid.",
+          },
+          securitymasterid: {
+            type: "integer",
+            description:
+              "Validea internal security ID (integer). Use when you already have this ID from a previous lookup.",
+          },
+        },
+        required: [],
+      },
+    },
   ],
 }));
 
@@ -687,10 +794,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (name === "screen_guru_scores") {
     try {
       const data = await fetchScreener({
-        filters:  args?.filters,
-        date:     args?.date,
-        sort_by:  args?.sort_by,
-        limit:    args?.limit,
+        filters:        args?.filters,
+        factor_filters: args?.factor_filters,
+        date:           args?.date,
+        sort_by:        args?.sort_by,
+        sort_dir:       args?.sort_dir,
+        limit:          args?.limit,
       });
 
       if (!data.ok) {
@@ -761,6 +870,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         isError: true,
         content: [{ type: "text", text: `Fetch error: ${err.message}` }],
       };
+    }
+  }
+
+  if (name === "get_factor_ranks") {
+    const identifiers = [args?.ticker, args?.cusip, args?.securitymasterid].filter(Boolean);
+    if (identifiers.length === 0) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: "Error: provide exactly one of: ticker, cusip, or securitymasterid." }],
+      };
+    }
+    if (identifiers.length > 1) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: "Error: provide only one of: ticker, cusip, or securitymasterid — not multiple." }],
+      };
+    }
+
+    try {
+      const data = await fetchFactorRanks({
+        ticker:           args.ticker,
+        cusip:            args.cusip,
+        securitymasterid: args.securitymasterid,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
     }
   }
 
