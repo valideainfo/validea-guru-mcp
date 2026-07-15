@@ -52,6 +52,10 @@ const FACTOR_RANKS_URL =
   process.env.FACTOR_RANKS_URL ||
   "http://mors.validea.com/stocks/factorranks_api.asp";
 
+const FUNDAMENTALS_URL =
+  process.env.FUNDAMENTALS_URL ||
+  "http://mors.validea.com/stocks/fundamentals_api.asp";
+
 const API_KEY = process.env.GURU_API_KEY || "";
 
 const STRATEGIES = [
@@ -204,6 +208,52 @@ async function fetchFactorRanks(params) {
   if (params.cusip)            url.searchParams.set("cusip",            params.cusip);
   if (params.securitymasterid) url.searchParams.set("securitymasterid", String(params.securitymasterid));
   if (API_KEY)                 url.searchParams.set("api_key",          API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+// Single-stock fundamentals retrieval (fundamentals_api.asp in retrieve mode).
+async function fetchFundamentals(params) {
+  const url = new URL(FUNDAMENTALS_URL);
+  if (params.ticker)           url.searchParams.set("ticker",           params.ticker);
+  if (params.cusip)            url.searchParams.set("cusip",            params.cusip);
+  if (params.securitymasterid) url.searchParams.set("securitymasterid", String(params.securitymasterid));
+  if (params.fields && params.fields.length) url.searchParams.set("fields", params.fields.join(","));
+  if (API_KEY)                 url.searchParams.set("api_key",          API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+// Fundamentals screener (fundamentals_api.asp in screen mode — no identifier).
+async function fetchFundamentalsScreen(params) {
+  const url = new URL(FUNDAMENTALS_URL);
+  // Numeric filters: { peRatio: { max: 15 }, roe: { min: 15 } }
+  if (params.filters) {
+    for (const [field, bounds] of Object.entries(params.filters)) {
+      if (bounds.min != null) url.searchParams.set(`${field}_min`, String(bounds.min));
+      if (bounds.max != null) url.searchParams.set(`${field}_max`, String(bounds.max));
+    }
+  }
+  if (params.sector)   url.searchParams.set("sector",   params.sector);
+  if (params.industry) url.searchParams.set("industry", params.industry);
+  if (params.exchange) url.searchParams.set("exchange", params.exchange);
+  if (params.country)  url.searchParams.set("country",  params.country);
+  if (params.sort_by)  url.searchParams.set("sortby",   params.sort_by);
+  if (params.sort_dir) url.searchParams.set("sortdir",  params.sort_dir);
+  if (params.limit)    url.searchParams.set("limit",    String(params.limit));
+  if (params.full)     url.searchParams.set("full",     "1");
+  if (params.fields && params.fields.length) url.searchParams.set("fields", params.fields.join(","));
+  if (API_KEY)         url.searchParams.set("api_key",  API_KEY);
 
   const response = await fetch(url.toString());
   const text = await response.text();
@@ -685,6 +735,106 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: [],
       },
     },
+    {
+      name: "get_fundamentals",
+      description:
+        "Get Validea's fundamental data for a single stock from the CompanyFundamentalsMaster table. " +
+        "Returns an identity block (ticker, company, sector, industry, exchange, country) plus a comprehensive " +
+        "'fundamentals' object spanning valuation (peRatio, forwardPE, priceToBook, priceToSales, evToEbitda, " +
+        "earningsYield, acquirersMultiple, cape, pegRatio, ...), profitability/quality (roe, roa, roic, profitMargin, " +
+        "grossMargin, operatingEarnings, ...), growth (revGrowth, epsGrowth, avg5YEpsGrowth, projected5YEpsGrowth, ...), " +
+        "financial strength (currentRatio, totalDebtToEquity, debtToEbitda, totalDebt, totalAssets, equity, ...), " +
+        "per-share/income (eps, sales, dividend, yield, divPerShare, cfps, fcfpsTtm, shareholderYield, netPayoutYield), " +
+        "momentum (relStr3Months, relStr6Months, twelveMinusOneReturn, beta, standardDeviation), " +
+        "analyst estimates/revisions (numAnalysts, epsEy0, epsEy1, epsEy0UpRevisions, epsEy0DownRevisions, ...), " +
+        "ownership (insiderOwn, institutionalOwn), and composite factor ranks (valueRank, qualityRank, valuePercentile, " +
+        "qualityPercentile, earningsYieldRank, magicFormulaRank, fscore, gscore, ...). " +
+        "Use for questions like 'what is NVDA's P/E, ROE, and debt-to-equity?' or 'show me AAPL's full fundamentals'. " +
+        "Provide exactly one of: ticker, cusip, or securitymasterid. " +
+        "Optionally pass fields=[...] to return only specific fundamental keys.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticker: { type: "string", description: "Stock ticker symbol (e.g. AAPL)." },
+          cusip: { type: "string", description: "9-character CUSIP (for delisted/acquired names)." },
+          securitymasterid: { type: "integer", description: "Validea internal security ID." },
+          fields: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Optional. Return only these fundamental field keys (e.g. [\"peRatio\",\"roe\",\"priceToBook\"]). " +
+              "Omit to return the full fundamentals set.",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "screen_fundamentals",
+      description:
+        "Screen the entire Validea universe by fundamental metrics from CompanyFundamentalsMaster. " +
+        "Use for questions like 'find stocks with P/E under 15 and ROE over 20%', " +
+        "'cheap stocks by EV/EBITDA in the technology sector', or 'highest shareholder yield large caps'. " +
+        "Filter with a filters object keyed by fundamental field, each with min and/or max. " +
+        "Filterable/sortable numeric fields include: marketCap, price, beta, standardDeviation, peRatio, forwardPE, " +
+        "priceToBook, priceToSales, priceToCashFlow, evToEbitda, earningsYield, acquirersMultiple, cape, pegRatio, " +
+        "roe, roa, roic, profitMargin, grossMargin, revGrowth, epsGrowth, avg5YEpsGrowth, currentRatio, " +
+        "totalDebtToEquity, ltDebtToEquity, debtToEbitda, payoutRatio, eps, sales, dividend, yield, shareholderYield, " +
+        "netPayoutYield, relStr6Months, twelveMinusOneReturn, numAnalysts, valuePercentile, qualityPercentile, " +
+        "magicFormulaRank, fscore, gscore (see get_fundamentals for the full field list). " +
+        "Optionally narrow by sector, industry, exchange, or country (case-insensitive substring match). " +
+        "Sort by any numeric field via sort_by (default marketCap) and sort_dir (asc/desc, default desc). " +
+        "Each row returns identity + a core set of fundamentals plus whatever fields you filtered/sorted on; " +
+        "pass fields=[...] to choose exactly which fundamentals to return, or full=true to return them all.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          filters: {
+            type: "object",
+            description:
+              "Fundamental filters keyed by field name, each with 'min' and/or 'max'. " +
+              "Example: { \"peRatio\": { \"max\": 15 }, \"roe\": { \"min\": 20 }, \"marketCap\": { \"min\": 2000 } }. " +
+              "Note money values (marketCap, sales, totalDebt, ...) are in the table's native units (millions).",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                min: { type: "number" },
+                max: { type: "number" },
+              },
+            },
+          },
+          sector:   { type: "string", description: "Filter to a sector (substring match, e.g. 'Technology')." },
+          industry: { type: "string", description: "Filter to an industry (substring match)." },
+          exchange: { type: "string", description: "Filter to an exchange (substring match, e.g. 'NASDAQ')." },
+          country:  { type: "string", description: "Filter to a country (substring match)." },
+          sort_by: {
+            type: "string",
+            description: "Numeric fundamental field to sort by (default marketCap).",
+          },
+          sort_dir: {
+            type: "string",
+            enum: ["asc", "desc"],
+            description: "Sort direction (default desc). Use asc for 'cheapest'/'lowest' style screens.",
+          },
+          fields: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional. Fundamental field keys to return per row (in addition to identity + filtered/sorted fields).",
+          },
+          full: {
+            type: "boolean",
+            description: "Return the complete fundamentals set for each row instead of the core subset. Default false.",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 200,
+            description: "Maximum rows to return (default 50, max 200).",
+          },
+        },
+        required: [],
+      },
+    },
   ],
 }));
 
@@ -870,6 +1020,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         isError: true,
         content: [{ type: "text", text: `Fetch error: ${err.message}` }],
       };
+    }
+  }
+
+  if (name === "get_fundamentals") {
+    const identifiers = [args?.ticker, args?.cusip, args?.securitymasterid].filter(Boolean);
+    if (identifiers.length === 0) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: "Error: provide exactly one of: ticker, cusip, or securitymasterid." }],
+      };
+    }
+    if (identifiers.length > 1) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: "Error: provide only one of: ticker, cusip, or securitymasterid — not multiple." }],
+      };
+    }
+    try {
+      const data = await fetchFundamentals({
+        ticker:           args.ticker,
+        cusip:            args.cusip,
+        securitymasterid: args.securitymasterid,
+        fields:           args.fields,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "screen_fundamentals") {
+    try {
+      const data = await fetchFundamentalsScreen({
+        filters:  args?.filters,
+        sector:   args?.sector,
+        industry: args?.industry,
+        exchange: args?.exchange,
+        country:  args?.country,
+        sort_by:  args?.sort_by,
+        sort_dir: args?.sort_dir,
+        fields:   args?.fields,
+        full:     args?.full,
+        limit:    args?.limit,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
     }
   }
 
