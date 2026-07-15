@@ -972,43 +972,75 @@ if (process.env.PORT) {
   const sessions = new Map();           // sessionId -> SSEServerTransport
   const streamableSessions = new Map(); // sessionId -> StreamableHTTPServerTransport
 
+  // Never let a single bad request take down the whole server. Without these,
+  // an error thrown inside the async request handler (e.g. a client reconnecting
+  // with a stale mcp-session-id after a restart) becomes an unhandled rejection
+  // that crashes the Node process — which Azure restarts, causing a crash-loop.
+  process.on("unhandledRejection", (reason) => {
+    console.error("Unhandled promise rejection (ignored, server stays up):", reason);
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("Uncaught exception (ignored, server stays up):", err);
+  });
+
   const httpServer = http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://localhost`);
+    try {
+      const url = new URL(req.url, `http://localhost`);
 
-    if (req.method === "GET" && url.pathname === "/sse") {
-      const transport = new SSEServerTransport("/message", res);
-      sessions.set(transport.sessionId, transport);
-      transport.onclose = () => {
-        sessions.delete(transport.sessionId);
-        clearInterval(keepAliveInterval);
-      };
-      // Send a comment ping every 30s to keep the connection alive through Azure timeouts
-      const keepAliveInterval = setInterval(() => {
-        if (!res.writableEnded) res.write(": ping\n\n");
-      }, 30000);
-      await server.connect(transport);
+      if (req.method === "GET" && url.pathname === "/sse") {
+        const transport = new SSEServerTransport("/message", res);
+        sessions.set(transport.sessionId, transport);
+        transport.onclose = () => {
+          sessions.delete(transport.sessionId);
+          clearInterval(keepAliveInterval);
+        };
+        // Send a comment ping every 30s to keep the connection alive through Azure timeouts
+        const keepAliveInterval = setInterval(() => {
+          if (!res.writableEnded) res.write(": ping\n\n");
+        }, 30000);
+        await server.connect(transport);
 
-    } else if (req.method === "POST" && url.pathname === "/message") {
-      const sessionId = url.searchParams.get("sessionId");
-      const transport = sessions.get(sessionId);
-      if (transport) {
-        await transport.handlePostMessage(req, res);
-      } else {
-        res.writeHead(404, { "Content-Type": "text/plain" });
-        res.end("Session not found");
-      }
+      } else if (req.method === "POST" && url.pathname === "/message") {
+        const sessionId = url.searchParams.get("sessionId");
+        const transport = sessions.get(sessionId);
+        if (transport) {
+          await transport.handlePostMessage(req, res);
+        } else {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("Session not found");
+        }
 
-    } else if (url.pathname === "/mcp") {
-      const sessionId = req.headers["mcp-session-id"];
-      let transport = sessionId ? streamableSessions.get(sessionId) : undefined;
+      } else if (url.pathname === "/mcp") {
+        const sessionId = req.headers["mcp-session-id"];
 
-      if (!transport) {
+        if (sessionId) {
+          // Existing session: must still be in memory. If the process restarted,
+          // the map is empty — tell the client to re-initialize (404) instead of
+          // building a half-open transport that throws on a non-initialize request.
+          const transport = streamableSessions.get(sessionId);
+          if (!transport) {
+            res.writeHead(404, {
+              "Content-Type": "application/json",
+              "mcp-session-id": sessionId,
+            });
+            res.end(JSON.stringify({
+              jsonrpc: "2.0",
+              error: { code: -32001, message: "Session not found or expired; re-initialize" },
+              id: null,
+            }));
+            return;
+          }
+          await transport.handleRequest(req, res);
+          return;
+        }
+
+        // No session id: this must be a fresh initialize (POST).
         if (req.method !== "POST") {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Bad Request: missing or invalid Mcp-Session-Id");
           return;
         }
-        transport = new StreamableHTTPServerTransport({
+        const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => streamableSessions.set(sid, transport),
         });
@@ -1016,17 +1048,31 @@ if (process.env.PORT) {
           if (transport.sessionId) streamableSessions.delete(transport.sessionId);
         };
         await server.connect(transport);
+        await transport.handleRequest(req, res);
+
+      } else if (req.method === "GET" && url.pathname === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", server: "validea-guru-mcp" }));
+
+      } else {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not found");
       }
+    } catch (err) {
+      console.error(`Request handler error on ${req.method} ${req.url}:`, err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Internal Server Error");
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    }
+  });
 
-      await transport.handleRequest(req, res);
-
-    } else if (req.method === "GET" && url.pathname === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", server: "validea-guru-mcp" }));
-
-    } else {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Not found");
+  // Malformed HTTP / socket errors must not bubble up and crash the process either.
+  httpServer.on("clientError", (err, socket) => {
+    if (socket.writable && !socket.destroyed) {
+      socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
     }
   });
 
