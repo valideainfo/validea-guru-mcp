@@ -321,12 +321,7 @@ async function fetchGuruAnalysis(params) {
   return JSON.parse(text.slice(0, jsonEnd + 1));
 }
 
-const server = new Server(
-  { name: "validea-guru-mcp", version: "1.0.0" },
-  { capabilities: { tools: {} } }
-);
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
+const listToolsHandler = async () => ({
   tools: [
     {
       name: "get_guru_scores_history",
@@ -836,9 +831,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
   ],
-}));
+});
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+const callToolHandler = async (request) => {
   const { name, arguments: args } = request.params;
 
   if (name === "list_model_portfolios") {
@@ -1164,7 +1159,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     isError: true,
     content: [{ type: "text", text: `Unknown tool: ${name}` }],
   };
-});
+};
+
+// Build a fresh Server per connection. A Protocol instance can only ever be bound
+// to ONE transport — the SDK throws "Already connected to a transport" on a second
+// connect() — so a single shared Server would serve the first session after startup
+// and fail every session after it.
+function createServer() {
+  const server = new Server(
+    { name: "validea-guru-mcp", version: "1.0.0" },
+    { capabilities: { tools: {} } }
+  );
+  server.setRequestHandler(ListToolsRequestSchema, listToolsHandler);
+  server.setRequestHandler(CallToolRequestSchema, callToolHandler);
+  return server;
+}
 
 if (process.env.PORT) {
   // Remote mode: HTTP server (Azure App Service, etc.)
@@ -1201,7 +1210,7 @@ if (process.env.PORT) {
         const keepAliveInterval = setInterval(() => {
           if (!res.writableEnded) res.write(": ping\n\n");
         }, 30000);
-        await server.connect(transport);
+        await createServer().connect(transport);
 
       } else if (req.method === "POST" && url.pathname === "/message") {
         const sessionId = url.searchParams.get("sessionId");
@@ -1250,7 +1259,7 @@ if (process.env.PORT) {
         transport.onclose = () => {
           if (transport.sessionId) streamableSessions.delete(transport.sessionId);
         };
-        await server.connect(transport);
+        await createServer().connect(transport);
         await transport.handleRequest(req, res);
 
       } else if (req.method === "GET" && url.pathname === "/health") {
@@ -1286,5 +1295,5 @@ if (process.env.PORT) {
 } else {
   // Local mode: stdio transport (for Claude Desktop direct use)
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await createServer().connect(transport);
 }
