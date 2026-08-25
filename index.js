@@ -36,6 +36,14 @@ const PORTFOLIO_HOLDINGS_URL =
   process.env.PORTFOLIO_HOLDINGS_URL ||
   "http://mors.validea.com/stocks/modelportfolioholdings_api.asp";
 
+const ETF_PORTFOLIO_PERF_URL =
+  process.env.ETF_PORTFOLIO_PERF_URL ||
+  "http://mors.validea.com/stocks/etfportfolioperf_api.asp";
+
+const ETF_PORTFOLIO_HOLDINGS_URL =
+  process.env.ETF_PORTFOLIO_HOLDINGS_URL ||
+  "http://mors.validea.com/stocks/etfportfolioholdings_api.asp";
+
 const TRADE_SIGNALS_URL =
   process.env.TRADE_SIGNALS_URL ||
   "http://mors.validea.com/stocks/tradealerts_signals_api.asp";
@@ -55,6 +63,10 @@ const FACTOR_RANKS_URL =
 const FUNDAMENTALS_URL =
   process.env.FUNDAMENTALS_URL ||
   "http://mors.validea.com/stocks/fundamentals_api.asp";
+
+const STOCK_OF_MONTH_URL =
+  process.env.STOCK_OF_MONTH_URL ||
+  "http://mors.validea.com/stocks/stockofmonth_api.asp";
 
 const API_KEY = process.env.GURU_API_KEY || "";
 
@@ -123,6 +135,37 @@ async function fetchPortfolioPerf(params) {
 
 async function fetchPortfolioHoldings(params) {
   const url = new URL(PORTFOLIO_HOLDINGS_URL);
+  if (params.portfolioid != null) url.searchParams.set("portfolioid", String(params.portfolioid));
+  if (params.ticker)              url.searchParams.set("ticker",      params.ticker);
+  if (params.asofdate)            url.searchParams.set("asofdate",    params.asofdate);
+  if (API_KEY)                    url.searchParams.set("api_key",     API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+async function fetchEtfPortfolioPerf(params) {
+  const url = new URL(ETF_PORTFOLIO_PERF_URL);
+  if (params.portfolioid != null) url.searchParams.set("portfolioid", String(params.portfolioid));
+  if (params.include_yearly)      url.searchParams.set("include_yearly", "true");
+  if (params.startdate)           url.searchParams.set("startdate", params.startdate);
+  if (params.enddate)             url.searchParams.set("enddate",   params.enddate);
+  if (API_KEY)                    url.searchParams.set("api_key",   API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+async function fetchEtfPortfolioHoldings(params) {
+  const url = new URL(ETF_PORTFOLIO_HOLDINGS_URL);
   if (params.portfolioid != null) url.searchParams.set("portfolioid", String(params.portfolioid));
   if (params.ticker)              url.searchParams.set("ticker",      params.ticker);
   if (params.asofdate)            url.searchParams.set("asofdate",    params.asofdate);
@@ -321,8 +364,69 @@ async function fetchGuruAnalysis(params) {
   return JSON.parse(text.slice(0, jsonEnd + 1));
 }
 
+async function fetchStockOfMonth(params) {
+  const url = new URL(STOCK_OF_MONTH_URL);
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
+  }
+  if (API_KEY) url.searchParams.set("api_key", API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
 const listToolsHandler = async () => ({
   tools: [
+    {
+      name: "get_stock_of_month_candidates",
+      description:
+        "Generate the monthly 'Validea Stock of the Month' shortlist for Agora. " +
+        "Returns a ranked list of US stocks (default 10) that score well across multiple guru " +
+        "strategies, score well on Twin Momentum (Agora's primary Validea model), and pass " +
+        "marquee-name strategies that are good to write about (Buffett, Lynch, Graham, etc). " +
+        "Stocks already used as a Stock of the Month are automatically excluded via the pick log. " +
+        "Each candidate includes the strategies it passes with strong interest (score 90+) and " +
+        "some interest (80+), plus price, market cap, sector, industry, PE, yield and relative " +
+        "strength — everything needed to write the 'why Validea likes it' bullets. " +
+        "Pair this with get_guru_analysis for the detailed per-criterion reasoning on a chosen stock.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: {
+            type: "integer",
+            description: "Number of candidates to return (default 10, max 50).",
+          },
+          mincap: {
+            type: "number",
+            description: "Minimum market cap in $millions. Default 1000 (= $1 billion).",
+          },
+          maxpersector: {
+            type: "integer",
+            description:
+              "Cap candidates per sector so the list has variety. Default 0 (no cap). " +
+              "3 is a good setting for a monthly writeup list.",
+          },
+          country: {
+            type: "string",
+            description: "Country filter, default 'USA'. Pass 'ALL' to disable.",
+          },
+          includeused: {
+            type: "boolean",
+            description:
+              "Set true to include stocks already used as a Stock of the Month. " +
+              "Default false (previously picked stocks are excluded).",
+          },
+          date: {
+            type: "string",
+            description: "As-of date YYYY-MM-DD. Defaults to the most recent available.",
+          },
+        },
+      },
+    },
     {
       name: "get_guru_scores_history",
       description:
@@ -562,6 +666,99 @@ const listToolsHandler = async () => ({
           ticker: {
             type: "string",
             description: "Stock ticker symbol (e.g. AAPL, MSFT, NVDA).",
+          },
+        },
+        required: ["ticker"],
+      },
+    },
+    {
+      name: "list_etf_portfolios",
+      description:
+        "List all active Validea ETF model portfolios with summary performance statistics. " +
+        "These are ETF-based strategies (e.g. Factor Rotation - Value/Momentum/Macro/Composite) that hold a " +
+        "weighted basket of ETFs rather than individual stocks. " +
+        "Returns portfolioid (needed for get_etf_portfolio_performance and get_etf_portfolio_holdings), " +
+        "name, portfoliobased, portfoliotype, investingstyle, inception date, and key stats: " +
+        "annualized inception return, YTD, 1yr, 3yr, 5yr, 10yr vs S&P 500, beta, accuracy, sharpe, max drawdown. " +
+        "All returns are decimals (0.12 = 12%). Analogous to list_model_portfolios but for ETF portfolios.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "get_etf_portfolio_performance",
+      description:
+        "Get detailed performance statistics for a specific Validea ETF model portfolio. " +
+        "Standard mode (portfolioid only): all period returns — YTD, 1-week, 1-month, 3-month, 6-month, 1-year, " +
+        "3-year, 5-year, 10-year, and since inception — all vs S&P 500, plus risk metrics (beta, accuracy, sharpe, " +
+        "standard deviation, max drawdown, turnover, skewness, kurtosis, market correlation). " +
+        "Set include_yearly=true for year-by-year returns. " +
+        "Custom period mode (portfolioid + startdate + enddate): portfolio and S&P 500 return over any date range. " +
+        "Use list_etf_portfolios first to find the correct portfolioid. All returns are decimals (0.12 = 12%). " +
+        "Analogous to get_portfolio_performance but for ETF portfolios (no size/rebalancing or days-to-recover fields).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          portfolioid: {
+            type: "integer",
+            description: "ETF portfolio ID from list_etf_portfolios. Required.",
+          },
+          include_yearly: {
+            type: "boolean",
+            description: "Include year-by-year returns. Default false.",
+          },
+          startdate: {
+            type: "string",
+            description: "Start date for custom period in YYYY-MM-DD format. Requires enddate.",
+          },
+          enddate: {
+            type: "string",
+            description: "End date for custom period in YYYY-MM-DD format. Requires startdate.",
+          },
+        },
+        required: ["portfolioid"],
+      },
+    },
+    {
+      name: "get_etf_portfolio_holdings",
+      description:
+        "Get the ETF holdings for a specific Validea ETF model portfolio. " +
+        "ETF portfolios are snapshot/rebalance-based, so this returns the latest holdings snapshot by default, " +
+        "or the snapshot as of any historical date via asofdate. " +
+        "Each holding includes ticker, ETF name, asset class, target weight (decimal, e.g. 0.20 = 20%), " +
+        "start/end price for the snapshot period, and the ETF's current price. " +
+        "Use list_etf_portfolios first to find the correct portfolioid.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          portfolioid: {
+            type: "integer",
+            description: "ETF portfolio ID from list_etf_portfolios. Required.",
+          },
+          asofdate: {
+            type: "string",
+            description: "Return the holdings snapshot as of this date (YYYY-MM-DD). Defaults to the latest snapshot.",
+          },
+        },
+        required: ["portfolioid"],
+      },
+    },
+    {
+      name: "get_etf_portfolio_stock_history",
+      description:
+        "Look up which Validea ETF model portfolios a given ETF has been (or currently is) a member of. " +
+        "Returns one row per ETF portfolio the ETF has appeared in, with the first date added, the last date seen, " +
+        "and whether it is currently held (in the portfolio's latest snapshot). " +
+        "Useful for questions like 'which ETF portfolios currently hold SPY?' or 'where has XMLV been used?'. " +
+        "Provide an ETF ticker.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticker: {
+            type: "string",
+            description: "ETF ticker symbol (e.g. SPY, XMLV, RPG).",
           },
         },
         required: ["ticker"],
@@ -836,6 +1033,25 @@ const listToolsHandler = async () => ({
 const callToolHandler = async (request) => {
   const { name, arguments: args } = request.params;
 
+  if (name === "get_stock_of_month_candidates") {
+    try {
+      const data = await fetchStockOfMonth({
+        limit:        args?.limit,
+        mincap:       args?.mincap,
+        maxpersector: args?.maxpersector,
+        country:      args?.country,
+        includeused:  args?.includeused ? "1" : "",
+        date:         args?.date,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
   if (name === "list_model_portfolios") {
     try {
       const data = await fetchPortfolioPerf({});
@@ -892,6 +1108,71 @@ const callToolHandler = async (request) => {
     }
     try {
       const data = await fetchPortfolioHoldings({ ticker: args.ticker });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "list_etf_portfolios") {
+    try {
+      const data = await fetchEtfPortfolioPerf({});
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "get_etf_portfolio_performance") {
+    if (!args?.portfolioid) {
+      return { isError: true, content: [{ type: "text", text: "Error: portfolioid is required." }] };
+    }
+    try {
+      const data = await fetchEtfPortfolioPerf({
+        portfolioid:    args.portfolioid,
+        include_yearly: args.include_yearly,
+        startdate:      args.startdate,
+        enddate:        args.enddate,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "get_etf_portfolio_holdings") {
+    if (!args?.portfolioid) {
+      return { isError: true, content: [{ type: "text", text: "Error: portfolioid is required." }] };
+    }
+    try {
+      const data = await fetchEtfPortfolioHoldings({
+        portfolioid: args.portfolioid,
+        asofdate:    args.asofdate,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "get_etf_portfolio_stock_history") {
+    if (!args?.ticker) {
+      return { isError: true, content: [{ type: "text", text: "Error: ticker is required." }] };
+    }
+    try {
+      const data = await fetchEtfPortfolioHoldings({ ticker: args.ticker });
       if (!data.ok) {
         return { isError: true, content: [{ type: "text", text: `API error: ${data.message}` }] };
       }
