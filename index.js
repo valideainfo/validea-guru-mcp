@@ -64,6 +64,10 @@ const FUNDAMENTALS_URL =
   process.env.FUNDAMENTALS_URL ||
   "http://mors.validea.com/stocks/fundamentals_api.asp";
 
+const PRICE_HISTORY_URL =
+  process.env.PRICE_HISTORY_URL ||
+  "http://mors.validea.com/stocks/pricehistory_api.asp";
+
 const STOCK_OF_MONTH_URL =
   process.env.STOCK_OF_MONTH_URL ||
   "http://mors.validea.com/stocks/stockofmonth_api.asp";
@@ -267,6 +271,26 @@ async function fetchFundamentals(params) {
   if (params.cusip)            url.searchParams.set("cusip",            params.cusip);
   if (params.securitymasterid) url.searchParams.set("securitymasterid", String(params.securitymasterid));
   if (params.fields && params.fields.length) url.searchParams.set("fields", params.fields.join(","));
+  if (API_KEY)                 url.searchParams.set("api_key",          API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+// Historical split-adjusted pricing (pricehistory_api.asp).
+async function fetchPriceHistory(params) {
+  const url = new URL(PRICE_HISTORY_URL);
+  if (params.ticker)           url.searchParams.set("ticker",           params.ticker);
+  if (params.cusip)            url.searchParams.set("cusip",            params.cusip);
+  if (params.securitymasterid) url.searchParams.set("securitymasterid", String(params.securitymasterid));
+  if (params.startdate)        url.searchParams.set("startdate",        params.startdate);
+  if (params.enddate)          url.searchParams.set("enddate",          params.enddate);
+  if (params.frequency)        url.searchParams.set("frequency",        params.frequency);
+  if (params.limit)            url.searchParams.set("limit",            String(params.limit));
   if (API_KEY)                 url.searchParams.set("api_key",          API_KEY);
 
   const response = await fetch(url.toString());
@@ -482,6 +506,61 @@ const listToolsHandler = async () => ({
             minimum: 1,
             maximum: 2500,
             description: "Maximum number of rows to return (default 2500, max 2500).",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "get_price_history",
+      description:
+        "Retrieve historical split-adjusted stock prices for a security — for charts, backtests, " +
+        "return calculations, or joining prices to guru scores / fundamentals by date. " +
+        "Resolves the identifier to a CUSIP via securitymaster, then pulls daily pricing " +
+        "(coverage typically goes back to ~1999). Each row returns: date, close (the split-adjusted " +
+        "closing price — the primary field to use), adjClose (total-return adjusted), and open/high/low/volume " +
+        "(which may be null for some dates). frequency='weekly' or 'monthly' returns the closing price of each " +
+        "period (last trading day). Rows are newest-first. " +
+        "Provide exactly one of: ticker (active symbols), cusip (9-char, useful for delisted/acquired names), " +
+        "or securitymasterid (Validea internal integer ID). " +
+        "Use for questions like 'chart AAPL over the last 3 years', 'what did NVDA close at on 2023-06-15?', " +
+        "or 'monthly closes for MSFT since 2015'.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticker: {
+            type: "string",
+            description: "Stock ticker symbol (e.g. AAPL, MSFT, TSLA).",
+          },
+          cusip: {
+            type: "string",
+            description:
+              "9-character CUSIP identifier. Use for delisted or acquired companies whose ticker is no longer valid.",
+          },
+          securitymasterid: {
+            type: "integer",
+            description: "Validea internal security ID (integer). Use when you already have it from a prior lookup.",
+          },
+          startdate: {
+            type: "string",
+            description: "Start of date range in YYYY-MM-DD format. Defaults to 1 year ago.",
+          },
+          enddate: {
+            type: "string",
+            description: "End of date range in YYYY-MM-DD format. Defaults to today.",
+          },
+          frequency: {
+            type: "string",
+            enum: ["daily", "weekly", "monthly"],
+            description:
+              "Sampling frequency. 'daily' returns every trading day; 'weekly'/'monthly' return the closing " +
+              "price of the last trading day in each period. Default: daily.",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 10000,
+            description: "Maximum number of rows to return (default 2500, max 10000).",
           },
         },
         required: [],
@@ -1372,6 +1451,33 @@ const callToolHandler = async (request) => {
         ticker:           args.ticker,
         cusip:            args.cusip,
         securitymasterid: args.securitymasterid,
+      });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "get_price_history") {
+    const identifiers = [args?.ticker, args?.cusip, args?.securitymasterid].filter(Boolean);
+    if (identifiers.length === 0) {
+      return { isError: true, content: [{ type: "text", text: "Error: provide exactly one of: ticker, cusip, or securitymasterid." }] };
+    }
+    if (identifiers.length > 1) {
+      return { isError: true, content: [{ type: "text", text: "Error: provide only one of: ticker, cusip, or securitymasterid — not multiple." }] };
+    }
+    try {
+      const data = await fetchPriceHistory({
+        ticker:           args.ticker,
+        cusip:            args.cusip,
+        securitymasterid: args.securitymasterid,
+        startdate:        args.startdate,
+        enddate:          args.enddate,
+        frequency:        args.frequency,
+        limit:            args.limit,
       });
       if (!data.ok) {
         return { isError: true, content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }] };
