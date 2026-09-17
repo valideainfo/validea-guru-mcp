@@ -658,7 +658,11 @@ const listToolsHandler = async () => ({
     {
       name: "list_model_portfolios",
       description:
-        "List all active Validea model portfolios with summary performance statistics. " +
+        "List all LIVE Validea model portfolios with summary performance statistics. " +
+        "This is the discovery/overall surface — use it for finding top performers, building composites, " +
+        "screening strategies, or any cross-portfolio analysis. It returns ONLY live portfolios; " +
+        "inactive or report-only portfolios (e.g. custom client builds) are intentionally excluded and " +
+        "must be fetched directly by portfolioid via get_portfolio_performance / get_portfolio_holdings. " +
         "Portfolios are factor-based strategies inspired by legendary investors (Buffett, Lynch, Graham, etc.). " +
         "Each strategy is offered in multiple versions: 10-stock or 20-stock, and " +
         "monthly/quarterly/annual/tax-efficient rebalancing — use the portfolioid to drill into a specific version. " +
@@ -676,6 +680,9 @@ const listToolsHandler = async () => ({
       name: "get_portfolio_performance",
       description:
         "Get detailed performance statistics for a specific Validea model portfolio. " +
+        "Works for ANY portfolioid that has data, including inactive or report-only portfolios " +
+        "(e.g. custom client builds) that do NOT appear in list_model_portfolios — use this when a " +
+        "specific portfolio is named/requested for a report. " +
         "Standard mode (portfolioid only): returns all period returns — YTD, 1-week, 1-month, 3-month, " +
         "6-month, 1-year, 3-year, 5-year, 10-year, and since inception — all vs S&P 500, plus full risk metrics " +
         "(beta, accuracy, sharpe ratio, standard deviation, max drawdown, days to recover, turnover, skewness, kurtosis). " +
@@ -710,6 +717,8 @@ const listToolsHandler = async () => ({
       name: "get_portfolio_holdings",
       description:
         "Get the stock holdings for a specific Validea model portfolio. " +
+        "Works for ANY portfolioid that has data, including inactive or report-only portfolios " +
+        "(custom client builds) not listed by list_model_portfolios. " +
         "Returns current holdings by default (all positions not yet removed), " +
         "or holdings as of any historical date using asofdate. " +
         "Each holding includes ticker, company name, date added to portfolio, " +
