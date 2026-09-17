@@ -743,9 +743,10 @@ const listToolsHandler = async () => ({
       name: "get_portfolio_stock_history",
       description:
         "Look up which Validea model portfolios a stock has been (or currently is) a member of. " +
-        "Returns all historical and current portfolio memberships for the ticker across every portfolio " +
-        "(different strategies, sizes, rebalancing periods), with dates added/removed, " +
-        "whether it is currently held, and the guru score at time of entry. " +
+        "Returns one row per LIVE portfolio the ticker has appeared in, with first_added, last_seen, " +
+        "and currently_held (true if the stock is in that portfolio's latest rebalance snapshot). " +
+        "Scans live portfolios only (active) — inactive/report-only custom builds are excluded here; " +
+        "use get_portfolio_holdings by portfolioid to inspect those. " +
         "Useful for questions like 'which portfolios currently hold AAPL?', " +
         "'has NVDA ever been in the Buffett portfolio?', or 'show me all portfolios MSFT has been in'.",
       inputSchema: {
