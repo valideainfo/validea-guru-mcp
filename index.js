@@ -675,10 +675,13 @@ const listToolsHandler = async () => ({
       description:
         "Screen the stocks each investor's factor 'clone' flagged (ranked in the clone's top ~10% for a quarter), with what the " +
         "real investor did next and how the stock performed. Use for 'stocks the Dalio clone flagged that Bridgewater never bought, " +
-        "best returns' or 'Terry Smith clone picks the fund later bought within a year'. " +
+        "best returns', 'Klarman clone picks Baupost bought later, best first' or 'Terry Smith clone picks the fund later bought within a year'. " +
+        "The same stock is usually flagged in many quarters; pass distinct=true for one row per investor+stock (its first flag, " +
+        "returns measured from there) whenever the user asks for a list of top / best picks. " +
         "A clone is an in-sample description of the investor's style (built from their own holdings), NOT a prediction. " +
         "Each row: investor, quarterEnd, ticker, securityMasterId, clonePercentile (90-100), cloneRank (1=best), universeSize, " +
-        "inTop20, investorHeldAtFlag, investorBought1Q/4Q/8Q, firstBuyQuarter, investorEverOwned, 12-month return vs S&P 500, " +
+        "inTop20, investorHeldAtFlag, investorBought1Q/4Q/8Q, firstBuyQuarter, investorEverOwned, firstOwnedQuarter (first 13F the " +
+        "investor held it in, any time), 12-month return vs S&P 500, " +
         "and return-to-date vs S&P 500 (price returns).",
       inputSchema: {
         type: "object",
@@ -688,9 +691,13 @@ const listToolsHandler = async () => ({
           enddate: { type: "string", description: "Only flags with quarterEnd on/before this date (YYYY-MM-DD)." },
           min_percentile: { type: "number", minimum: 0, maximum: 100, description: "Minimum clone percentile (default 90)." },
           top20_only: { type: "boolean", description: "Only stocks in the clone's 20-stock portfolio that quarter." },
+          distinct: { type: "boolean", description: "One row per investor+stock (the clone's first qualifying flag) instead of one per quarter flagged." },
           outcome: {
-            type: "string", enum: ["bought_4q","bought_8q","held","never_owned"],
-            description: "Filter by what the real investor did: bought within 4Q/8Q, already held at the flag, or never owned it.",
+            type: "string", enum: ["bought_after","bought_4q","bought_8q","held","never_owned"],
+            description: "Filter by what the real investor did. bought_after = the clone flagged it BEFORE it ever appeared in the " +
+              "investor's 13F and they bought it later, at any horizon (use for 'flagged before they bought'). bought_4q/bought_8q = " +
+              "NEW or ADD within 4/8 quarters, including adds to a stock already held. held = already in their 13F at the flag. " +
+              "never_owned = never in any of their 13Fs.",
           },
           ticker: { type: "string", description: "Optional. Limit to one stock." },
           sort: { type: "string", enum: ["return","return_12m","percentile","rank","date"], description: "Sort order. Default: return (return-to-date, best-first)." },
@@ -1611,7 +1618,7 @@ const callToolHandler = async (request) => {
       get_13f_holdings:      { action: "holdings",       params: { investor: args?.investor, quarter: args?.quarter, changetype: args?.changetype, limit: args?.limit } },
       get_13f_stock_history: { action: "stock_history",  params: { ticker: args?.ticker, cusip: args?.cusip, securitymasterid: args?.securitymasterid, startdate: args?.startdate, enddate: args?.enddate, limit: args?.limit } },
       screen_13f_buys:       { action: "buys",           params: { investor: args?.investor, startdate: args?.startdate, enddate: args?.enddate, changetype: args?.changetype, min_weight: args?.min_weight, sort: args?.sort, limit: args?.limit } },
-      screen_clone_flags:    { action: "clone_flags",    params: { investor: args?.investor, startdate: args?.startdate, enddate: args?.enddate, min_percentile: args?.min_percentile, top20_only: args?.top20_only, outcome: args?.outcome, ticker: args?.ticker, sort: args?.sort, limit: args?.limit } },
+      screen_clone_flags:    { action: "clone_flags",    params: { investor: args?.investor, startdate: args?.startdate, enddate: args?.enddate, min_percentile: args?.min_percentile, top20_only: args?.top20_only, distinct: args?.distinct, outcome: args?.outcome, ticker: args?.ticker, sort: args?.sort, limit: args?.limit } },
     };
     if (name === "get_13f_holdings" && !args?.investor) {
       return { isError: true, content: [{ type: "text", text: "Error: investor is required (id or name)." }] };
