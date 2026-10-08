@@ -68,6 +68,10 @@ const PRICE_HISTORY_URL =
   process.env.PRICE_HISTORY_URL ||
   "http://mors.validea.com/stocks/pricehistory_api.asp";
 
+const THIRTEENF_URL =
+  process.env.THIRTEENF_URL ||
+  "http://mors.validea.com/stocks/thirteenf_api.asp";
+
 const STOCK_OF_MONTH_URL =
   process.env.STOCK_OF_MONTH_URL ||
   "http://mors.validea.com/stocks/stockofmonth_api.asp";
@@ -272,6 +276,24 @@ async function fetchFundamentals(params) {
   if (params.securitymasterid) url.searchParams.set("securitymasterid", String(params.securitymasterid));
   if (params.fields && params.fields.length) url.searchParams.set("fields", params.fields.join(","));
   if (API_KEY)                 url.searchParams.set("api_key",          API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+// 13F holdings + clone flags (thirteenf_api.asp). All tools share one page via action=.
+async function fetchThirteenF(action, params) {
+  const url = new URL(THIRTEENF_URL);
+  url.searchParams.set("action", action);
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null || v === "") continue;
+    url.searchParams.set(k, Array.isArray(v) ? v.join(",") : String(v));
+  }
+  if (API_KEY) url.searchParams.set("api_key", API_KEY);
 
   const response = await fetch(url.toString());
   const text = await response.text();
@@ -562,6 +584,117 @@ const listToolsHandler = async () => ({
             maximum: 10000,
             description: "Maximum number of rows to return (default 2500, max 10000).",
           },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "list_13f_investors",
+      description:
+        "List the 25 famous investors whose SEC 13F filings Validea tracks, with their factor-model 'clone' " +
+        "definitions. A clone is a factor model built from that investor's own 13F holdings (e.g. the Terry Smith " +
+        "clone ranks on ROIC / 5-yr ROE / low volatility) — an in-sample DESCRIPTION of their style, not a prediction. " +
+        "Returns per investor: investorId, name, firm, style, and clone info (factors with weights, holdingsFit = share " +
+        "of the investor's 13F value that lands in the clone's top 10% [0.10 = random], clearStyle = fit>=0.20, first/last quarter). " +
+        "Use this first to get investorId/name for the other 13F tools. Investors include Buffett, Ackman, Einhorn, Loeb, " +
+        "Tepper, Icahn, Hohn/TCI, Klarman, Akre, Terry Smith, Pabrai, Burry, Watsa, Miller, and systematic books " +
+        "(Simons, Dalio, Tudor Jones, Cohen) whose clones carry little signal.",
+      inputSchema: { type: "object", properties: {}, required: [] },
+    },
+    {
+      name: "get_13f_holdings",
+      description:
+        "Get one investor's 13F stock holdings for a given quarter, with how each position changed and how it has done since. " +
+        "13F = long US-listed stock positions only, filed ~45 days after quarter-end. " +
+        "Each position returns: ticker, issuer, securityMasterId, cusip, shares, valueUSD, weight (share of the investor's " +
+        "long stock value, 0-1), call/put value, changeType (INITIAL/NEW/ADD/HOLD/TRIM/EXIT), reEntry, shareChangePct, " +
+        "and return since the filing went public vs the S&P 500 (price returns). " +
+        "Use for 'what did Druckenmiller hold at 2025-06-30 and what was new?'. " +
+        "securityMasterId/cusip let you join to get_guru_scores_history, get_fundamentals, get_price_history.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          investor: { type: "string", description: "Investor id (integer) or name (e.g. 'Druckenmiller'). Required." },
+          quarter: { type: "string", description: "13F quarter-end YYYY-MM-DD. Defaults to the investor's latest filing." },
+          changetype: {
+            type: "array", items: { type: "string", enum: ["INITIAL","NEW","ADD","HOLD","TRIM","EXIT"] },
+            description: "Optional filter to these change types. Default: all held positions (excludes EXIT / 0-share rows).",
+          },
+          limit: { type: "integer", minimum: 1, maximum: 500, description: "Max rows (default 100, max 500)." },
+        },
+        required: ["investor"],
+      },
+    },
+    {
+      name: "get_13f_stock_history",
+      description:
+        "Show which tracked investors have held a given stock across 13F quarters, and when they bought/sold/trimmed it. " +
+        "Returns one row per investor-quarter the security appears in (newest first): investor, quarter, changeType, " +
+        "shares, valueUSD, weight, shareChangePct, call/put value, and return since public vs S&P 500. " +
+        "Use for 'which of these investors owned NVDA, and when did they buy?'. " +
+        "Provide exactly one of ticker, cusip, or securitymasterid.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticker: { type: "string", description: "Stock ticker (resolved to the security's internal id)." },
+          cusip: { type: "string", description: "9-character CUSIP." },
+          securitymasterid: { type: "integer", description: "Validea internal security id." },
+          startdate: { type: "string", description: "Only quarters on/after this date (YYYY-MM-DD)." },
+          enddate: { type: "string", description: "Only quarters on/before this date (YYYY-MM-DD)." },
+          limit: { type: "integer", minimum: 1, maximum: 500, description: "Max rows (default 100, max 500)." },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "screen_13f_buys",
+      description:
+        "Screen 13F buy events (NEW / ADD positions) across tracked investors, ranked by performance since the filing went public. " +
+        "Use for 'every NEW position by Tepper or Loeb since 2023, best performers first' or 'biggest new buys last quarter'. " +
+        "Each row: investor, quarter, ticker, issuer, securityMasterId, changeType, weight (0-1), valueUSD, shareChangePct, " +
+        "and return since public vs the S&P 500 (price returns). Returns are not predictions and ignore dividends.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          investor: { type: "string", description: "Optional. Limit to one investor (id or name)." },
+          startdate: { type: "string", description: "Only buys in quarters on/after this date (YYYY-MM-DD)." },
+          enddate: { type: "string", description: "Only buys in quarters on/before this date (YYYY-MM-DD)." },
+          changetype: {
+            type: "array", items: { type: "string", enum: ["INITIAL","NEW","ADD"] },
+            description: "Which buy types to include. Default: NEW and ADD.",
+          },
+          min_weight: { type: "number", description: "Minimum position weight as a fraction (e.g. 0.02 = 2% of the book)." },
+          sort: { type: "string", enum: ["return","weight","value","date"], description: "Sort order. Default: return (best-first)." },
+          limit: { type: "integer", minimum: 1, maximum: 500, description: "Max rows (default 100, max 500)." },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "screen_clone_flags",
+      description:
+        "Screen the stocks each investor's factor 'clone' flagged (ranked in the clone's top ~10% for a quarter), with what the " +
+        "real investor did next and how the stock performed. Use for 'stocks the Dalio clone flagged that Bridgewater never bought, " +
+        "best returns' or 'Terry Smith clone picks the fund later bought within a year'. " +
+        "A clone is an in-sample description of the investor's style (built from their own holdings), NOT a prediction. " +
+        "Each row: investor, quarterEnd, ticker, securityMasterId, clonePercentile (90-100), cloneRank (1=best), universeSize, " +
+        "inTop20, investorHeldAtFlag, investorBought1Q/4Q/8Q, firstBuyQuarter, investorEverOwned, 12-month return vs S&P 500, " +
+        "and return-to-date vs S&P 500 (price returns).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          investor: { type: "string", description: "Optional. Limit to one investor's clone (id or name)." },
+          startdate: { type: "string", description: "Only flags with quarterEnd on/after this date (YYYY-MM-DD)." },
+          enddate: { type: "string", description: "Only flags with quarterEnd on/before this date (YYYY-MM-DD)." },
+          min_percentile: { type: "number", minimum: 0, maximum: 100, description: "Minimum clone percentile (default 90)." },
+          top20_only: { type: "boolean", description: "Only stocks in the clone's 20-stock portfolio that quarter." },
+          outcome: {
+            type: "string", enum: ["bought_4q","bought_8q","held","never_owned"],
+            description: "Filter by what the real investor did: bought within 4Q/8Q, already held at the flag, or never owned it.",
+          },
+          ticker: { type: "string", description: "Optional. Limit to one stock." },
+          sort: { type: "string", enum: ["return","return_12m","percentile","rank","date"], description: "Sort order. Default: return (return-to-date, best-first)." },
+          limit: { type: "integer", minimum: 1, maximum: 500, description: "Max rows (default 100, max 500)." },
         },
         required: [],
       },
@@ -1462,6 +1595,35 @@ const callToolHandler = async (request) => {
         cusip:            args.cusip,
         securitymasterid: args.securitymasterid,
       });
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "list_13f_investors" || name === "get_13f_holdings" || name === "get_13f_stock_history" ||
+      name === "screen_13f_buys" || name === "screen_clone_flags") {
+    const map = {
+      list_13f_investors:    { action: "investors",     params: {} },
+      get_13f_holdings:      { action: "holdings",       params: { investor: args?.investor, quarter: args?.quarter, changetype: args?.changetype, limit: args?.limit } },
+      get_13f_stock_history: { action: "stock_history",  params: { ticker: args?.ticker, cusip: args?.cusip, securitymasterid: args?.securitymasterid, startdate: args?.startdate, enddate: args?.enddate, limit: args?.limit } },
+      screen_13f_buys:       { action: "buys",           params: { investor: args?.investor, startdate: args?.startdate, enddate: args?.enddate, changetype: args?.changetype, min_weight: args?.min_weight, sort: args?.sort, limit: args?.limit } },
+      screen_clone_flags:    { action: "clone_flags",    params: { investor: args?.investor, startdate: args?.startdate, enddate: args?.enddate, min_percentile: args?.min_percentile, top20_only: args?.top20_only, outcome: args?.outcome, ticker: args?.ticker, sort: args?.sort, limit: args?.limit } },
+    };
+    if (name === "get_13f_holdings" && !args?.investor) {
+      return { isError: true, content: [{ type: "text", text: "Error: investor is required (id or name)." }] };
+    }
+    if (name === "get_13f_stock_history") {
+      const ids = [args?.ticker, args?.cusip, args?.securitymasterid].filter(Boolean);
+      if (ids.length === 0) return { isError: true, content: [{ type: "text", text: "Error: provide one of ticker, cusip, or securitymasterid." }] };
+      if (ids.length > 1) return { isError: true, content: [{ type: "text", text: "Error: provide only one of ticker, cusip, or securitymasterid." }] };
+    }
+    try {
+      const { action, params } = map[name];
+      const data = await fetchThirteenF(action, params);
       if (!data.ok) {
         return { isError: true, content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }] };
       }
