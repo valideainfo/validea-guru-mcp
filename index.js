@@ -591,13 +591,13 @@ const listToolsHandler = async () => ({
     {
       name: "list_13f_investors",
       description:
-        "List the 25 famous investors whose SEC 13F filings Validea tracks, with their factor-model 'clone' " +
+        "List the famous investors (26 as of Oct 2026) whose SEC 13F filings Validea tracks, with their factor-model 'clone' " +
         "definitions. A clone is a factor model built from that investor's own 13F holdings (e.g. the Terry Smith " +
         "clone ranks on ROIC / 5-yr ROE / low volatility) — an in-sample DESCRIPTION of their style, not a prediction. " +
         "Returns per investor: investorId, name, firm, style, and clone info (factors with weights, holdingsFit = share " +
         "of the investor's 13F value that lands in the clone's top 10% [0.10 = random], clearStyle = fit>=0.20, first/last quarter). " +
         "Use this first to get investorId/name for the other 13F tools. Investors include Buffett, Ackman, Einhorn, Loeb, " +
-        "Tepper, Icahn, Hohn/TCI, Klarman, Akre, Terry Smith, Pabrai, Burry, Watsa, Miller, and systematic books " +
+        "Tepper, Icahn, Hohn/TCI, Klarman, Akre, Terry Smith, Pabrai, Burry, Watsa, Miller, Gerstner/Altimeter, and systematic books " +
         "(Simons, Dalio, Tudor Jones, Cohen) whose clones carry little signal.",
       inputSchema: { type: "object", properties: {}, required: [] },
     },
