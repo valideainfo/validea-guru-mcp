@@ -480,10 +480,14 @@ const listToolsHandler = async () => ({
         "Returns daily, weekly, or monthly scores (0–100) for up to 22 guru strategies " +
         "over a specified date range (max 5 years per request). " +
         "Scores of 80+ indicate 'some interest'; scores of 90+ indicate 'strong interest'. " +
-        "Each dated row also includes the Validea consensus index over time: valideaIndex " +
-        "(the current/consensus index — the default), valideaIndexOld (the original Validea Index), " +
-        "plus growthIndex, valueIndex, and totalGurus (number of strategies scoring 80+). " +
-        "Use this to track how a stock's consensus Validea Index has moved over time. " +
+        "Each dated row also includes all THREE distinct Validea Index generations over time. " +
+        "These are three SEPARATE indexes, not rescalings of one: " +
+        "valideaIndex = the ORIGINAL Validea Index (the original 12 strategies, 0–100) — the Validea Hot List is built on THIS one; " +
+        "valideaIndex2 = the same scoring system expanded to the full 22 strategies (0–~1700); " +
+        "valideaIndex3 = the completely rebuilt consensus system (a decimal/float score, roughly 0–14). " +
+        "valideaIndexOld is a deprecated alias of valideaIndex (the original). " +
+        "Also included: growthIndex, valueIndex, and totalGurus (number of strategies scoring 80+). " +
+        "Use this to track how any of a stock's three Validea Index generations has moved over time. " +
         "Provide exactly one of: ticker (for active/known symbols), cusip (9-character CUSIP, " +
         "useful for delisted or acquired companies whose ticker is no longer valid), " +
         "or securitymasterid (Validea's internal integer ID, returned in prior responses).",
@@ -719,8 +723,10 @@ const listToolsHandler = async () => ({
         "Summary metrics returned per stock: " +
         "totalGurus = number of strategies where the stock scores 80+ (some interest); " +
         "totalGurusSI = number of strategies where the stock scores 90+ (strong interest only); " +
-        "valideaIndex = the current/consensus composite ranking (weights strategies by historical performance — higher is better; this is the DEFAULT consensus score, from valideaindexnew); " +
-        "valideaIndexOld = the original ('classic') Validea Index (from valideaindex) for comparison; " +
+        "valideaIndex = the ORIGINAL Validea Index (original 12 strategies, 0–100; the Hot List is built on this; from valideaindex); " +
+        "valideaIndex2 = the same system expanded to the full 22 strategies (0–~1700; from valideaindexnew); " +
+        "valideaIndex3 = the completely rebuilt consensus system (decimal/float ~0–14; from valideaindex3); " +
+        "valideaIndexOld = deprecated alias of valideaIndex (the original); " +
         "growthIndex = composite score across growth-oriented strategies; " +
         "valueIndex = composite score across value-oriented strategies; " +
         "fundamentalGrade = overall fundamental quality grade; " +
@@ -773,7 +779,7 @@ const listToolsHandler = async () => ({
             type: "string",
             description:
               "Column to sort results by. Use a strategy key (e.g. 'warrenbuffett'), a summary metric " +
-              "(totalgurusnew, valideaindexnew [current/consensus], valideaindex [original], growthindex, valueindex, " +
+              "(totalgurusnew, valideaindex [ORIGINAL / Hot List], valideaindexnew [= ValideaIndex2, 22 strategies], valideaindex3 [= ValideaIndex3, rebuilt consensus], growthindex, valueindex, " +
               "fundamentalgrade, top5gurus), or a factor key (value, quality, momentum, lowVolatility, negativeQuality, ...). " +
               "Default: totalgurusnew. Guru/summary columns sort best-first as DESC; factor ranks sort best-first as ASC " +
               "(lower percentile = better), except negativeQuality. Use sort_dir to override.",
