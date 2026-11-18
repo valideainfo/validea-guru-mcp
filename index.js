@@ -76,6 +76,10 @@ const STOCK_OF_MONTH_URL =
   process.env.STOCK_OF_MONTH_URL ||
   "http://mors.validea.com/stocks/stockofmonth_api.asp";
 
+const TRENDFOLLOWING_URL =
+  process.env.TRENDFOLLOWING_URL ||
+  "http://mors.validea.com/stocks/trendfollowing_api.asp";
+
 const API_KEY = process.env.GURU_API_KEY || "";
 
 const STRATEGIES = [
@@ -288,6 +292,24 @@ async function fetchFundamentals(params) {
 // 13F holdings + clone flags (thirteenf_api.asp). All tools share one page via action=.
 async function fetchThirteenF(action, params) {
   const url = new URL(THIRTEENF_URL);
+  url.searchParams.set("action", action);
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null || v === "") continue;
+    url.searchParams.set(k, Array.isArray(v) ? v.join(",") : String(v));
+  }
+  if (API_KEY) url.searchParams.set("api_key", API_KEY);
+
+  const response = await fetch(url.toString());
+  const text = await response.text();
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+  const jsonEnd = text.lastIndexOf("}");
+  if (jsonEnd === -1) throw new Error("Response contained no JSON object");
+  return JSON.parse(text.slice(0, jsonEnd + 1));
+}
+
+// Trend following / market-timing signals (trendfollowing_api.asp). Tools share one page via action=.
+async function fetchTrendFollowing(action, params) {
+  const url = new URL(TRENDFOLLOWING_URL);
   url.searchParams.set("action", action);
   for (const [k, v] of Object.entries(params || {})) {
     if (v === undefined || v === null || v === "") continue;
@@ -1081,6 +1103,98 @@ const listToolsHandler = async () => ({
       },
     },
     {
+      name: "list_trend_signals",
+      description:
+        "List Validea's Trend Following (market-timing) signals across every tracked index. " +
+        "The trend system issues a BUY or SELL for each index based on its 50-day vs 200-day moving averages " +
+        "(a technical system — BUY when the trend is up, SELL when it breaks down). " +
+        "Use this to answer 'what's the current trend signal for the S&P 500 / gold / the Hot List?', " +
+        "'which asset classes are on a SELL right now?', or to compare timing vs buy-and-hold performance. " +
+        "Covered groups: Stocks (S&P 500, Russell 2000, NASDAQ 100, Dow, Developed Intl, EM, EAFE), " +
+        "Other Asset Classes (bonds, gold, commodities, REITs, preferreds, bank loans), " +
+        "Guru Portfolios (Hot List and each guru strategy), Style Boxes, Sectors, and Canada. " +
+        "Each index returns: indexId, ticker, name, group, inceptionDate, currentSignal (BUY/SELL), " +
+        "lastSignalChange (date the signal last flipped), trendFollowingReturn and buyHoldReturn (annualized), " +
+        "maxLoss and maxLossBuyHold (worst drawdown), plus 3/5/10-year and since-inception returns for both. " +
+        "All returns and drawdowns are decimal fractions (0.089 = 8.9%).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          type: {
+            type: "integer",
+            enum: [1, 2, 3, 4, 5, 6],
+            description:
+              "Optional group filter: 1=Stocks, 2=Other Asset Classes, 3=Guru Portfolios, " +
+              "4=Style Boxes, 5=Sectors, 6=Canada. Omit for all groups.",
+          },
+          signal: {
+            type: "string",
+            enum: ["BUY", "SELL"],
+            description: "Optional: return only indexes currently on this signal.",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "get_trend_signal",
+      description:
+        "Get the full Trend Following detail for ONE index (e.g. the S&P 500 chart page on the site). " +
+        "Returns everything list_trend_signals gives for that index PLUS the current price level, " +
+        "50-day and 200-day moving averages, the all-time high, and the percent the index sits " +
+        "below its all-time high and above/below each moving average, plus its most recent BUY/SELL changes. " +
+        "Identify the index by id, ticker, or name (e.g. index='S&P 500', index='^GSPC', index='GLD', index='Hot List'). " +
+        "All returns, drawdowns, and percent-positioning values are decimal fractions (−0.061 = 6.1% below).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          index: {
+            type: "string",
+            description:
+              "The index to look up: its name (e.g. 'S&P 500', 'Gold', 'Validea Hot List'), " +
+              "its ticker (e.g. '^GSPC', 'GLD', 'VNQ'), or its numeric indexId. " +
+              "Guru-portfolio indexes have no ticker — use the name or id.",
+          },
+        },
+        required: ["index"],
+      },
+    },
+    {
+      name: "get_trend_signal_history",
+      description:
+        "Get the full BUY/SELL signal-change history for one index's Trend Following signal " +
+        "(every time the timing signal flipped, newest first). " +
+        "Use this to see how often an index has switched and when past signals occurred. " +
+        "Identify the index by id, ticker, or name, and optionally bound the dates. " +
+        "Returns an array of { date, signal } change-points.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          index: {
+            type: "string",
+            description:
+              "The index: name (e.g. 'S&P 500'), ticker (e.g. '^GSPC', 'GLD'), or numeric indexId. " +
+              "Guru-portfolio indexes have no ticker — use the name or id.",
+          },
+          startdate: {
+            type: "string",
+            description: "Optional. Only signal changes on or after this date (YYYY-MM-DD).",
+          },
+          enddate: {
+            type: "string",
+            description: "Optional. Only signal changes on or before this date (YYYY-MM-DD).",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 2000,
+            description: "Max change-points to return (default 500, max 2000).",
+          },
+        },
+        required: ["index"],
+      },
+    },
+    {
       name: "list_guru_strategies",
       description:
         "List all 22 Validea guru investment strategies with their key names and labels. " +
@@ -1637,6 +1751,27 @@ const callToolHandler = async (request) => {
     try {
       const { action, params } = map[name];
       const data = await fetchThirteenF(action, params);
+      if (!data.ok) {
+        return { isError: true, content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] };
+    }
+  }
+
+  if (name === "list_trend_signals" || name === "get_trend_signal" || name === "get_trend_signal_history") {
+    if ((name === "get_trend_signal" || name === "get_trend_signal_history") && !args?.index) {
+      return { isError: true, content: [{ type: "text", text: "Error: index is required (name, ticker, or id)." }] };
+    }
+    const map = {
+      list_trend_signals:        { action: "list",    params: { type: args?.type, signal: args?.signal } },
+      get_trend_signal:          { action: "detail",  params: { index: args?.index } },
+      get_trend_signal_history:  { action: "history", params: { index: args?.index, startdate: args?.startdate, enddate: args?.enddate, limit: args?.limit } },
+    };
+    try {
+      const { action, params } = map[name];
+      const data = await fetchTrendFollowing(action, params);
       if (!data.ok) {
         return { isError: true, content: [{ type: "text", text: `API error [${data.error}]: ${data.message}` }] };
       }
